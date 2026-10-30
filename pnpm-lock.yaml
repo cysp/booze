@@ -49,11 +49,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/db
       '@clerk/backend':
-        specifier: 3.23.2
-        version: 3.23.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 3.26.4
+        version: 3.26.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/react':
-        specifier: 6.17.8
-        version: 6.17.8(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 6.18.3
+        version: 6.18.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@fontsource-variable/figtree':
         specifier: 5.3.0
         version: 5.3.0
@@ -383,12 +383,12 @@ packages:
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
 
-  '@clerk/backend@3.23.2':
-    resolution: {integrity: sha512-QW2qJPY7xQyn5SrNWJ+xO7o6va60X9/v4nX8y5zq8OJFS10X7GlEz8s5PDKTgo6W6SWb8L3APhrZH+LTp7yuNw==}
+  '@clerk/backend@3.26.4':
+    resolution: {integrity: sha512-zvXqCfOKhgkY7LonpE1p8tLO+XOciHKTJ9K3e3KykxuiSPwnxKeKVltJMO8xu4LPhF/joFRY/B1cPQM06/f6AQ==}
     engines: {node: '>=20.9.0'}
 
-  '@clerk/react@6.17.8':
-    resolution: {integrity: sha512-sNeMe+5ArLshOJgNtqUGHb7cLHjDjRhumBHBN2ovg4uHpL49kQ2UfDUTtxpRUdMNikUg0Oc1CwzLFBlUv1umXA==}
+  '@clerk/react@6.18.3':
+    resolution: {integrity: sha512-WuKtyxT3zEKuEBfmzmK2DnEXw65r0meRd4//wTmhXrPwKgEHZmtBtaIFK8CAybxCM4wl4QsoCOEXXEk1ngo+yw==}
     engines: {node: '>=20.9.0'}
     peerDependencies:
       react: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
@@ -3328,7 +3328,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@clerk/backend@3.23.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@clerk/backend@3.26.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@clerk/shared': 4.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       standardwebhooks: 1.1.1
@@ -3337,7 +3337,7 @@ snapshots:
       - react
       - react-dom
 
-  '@clerk/react@6.17.8(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@clerk/react@6.18.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@clerk/shared': 4.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
