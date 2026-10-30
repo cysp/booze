@@ -28,8 +28,8 @@
     "@stylexjs/stylex": "0.19.1",
     "drizzle-orm": "1.0.0-rc.5-5935859",
     "hono": "4.13.13",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "react-hook-form": "7.89.0",
     "zod": "4.6.5"
   },
