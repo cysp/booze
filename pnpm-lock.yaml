@@ -112,8 +112,8 @@ importers:
         specifier: 6.1.2
         version: 6.1.2(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
       axe-core:
-        specifier: 4.13.0
-        version: 4.13.0
+        specifier: 4.14.0
+        version: 4.14.0
       jsdom:
         specifier: 30.1.2
         version: 30.1.2
@@ -1691,8 +1691,8 @@ packages:
     resolution: {integrity: sha512-FvWoWYfSCM6kRxCSH+MGLHIKKGRL6A6AW7Zek2O32REPQRdg131428uRTKMBYAeRd3XXAaHDS60Wpri7CdKDrA==}
     engines: {node: '>=4'}
 
-  axe-core@4.13.0:
-    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+  axe-core@4.14.0:
+    resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
     engines: {node: '>=4'}
 
   baseline-browser-mapping@2.11.34:
@@ -4132,7 +4132,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  axe-core@4.13.0: {}
+  axe-core@4.14.0: {}
 
   baseline-browser-mapping@2.11.34: {}
 
