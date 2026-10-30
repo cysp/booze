@@ -6,3 +6,12 @@ autoInstallPeers: false
 strictPeerDependencies: false
 
 minimumReleaseAge: 1440
+
+# CI installs the manifest pin; keep the lockfile compatible with GitHub dependency updates.
+pmOnFail: ignore
+
+allowBuilds:
+  "@astryxdesign/cli": false
+  "@astryxdesign/core": false
+  esbuild: false
+  workerd: false

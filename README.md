@@ -24,7 +24,8 @@ pnpm --filter @chikachow/booze-web build
 `check` first validates the frozen lockfile, declared peer requirements, and
 lockfile deduplication. The required CI dependency job runs the same gates and
 rejects lockfile changes. Dependency resolution permits intermediate peer
-conflicts; strict validation re-runs resolution with lifecycle scripts disabled.
+conflicts; peer validation checks the committed lockfile without installing packages
+or running lifecycle scripts.
 Run `pnpm dedupe --ignore-scripts` to fix avoidable duplication, then review the
 lockfile and repeat the checks. Node declarations stay on the Node 24 runtime
 major; Dependabot leaves major upgrades for a runtime change.
