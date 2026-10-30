@@ -15,3 +15,7 @@ allowBuilds:
   "@astryxdesign/core": false
   esbuild: false
   workerd: false
+
+autoDedupe: true
+lockfile:
+  includeResolutionSettings: true
