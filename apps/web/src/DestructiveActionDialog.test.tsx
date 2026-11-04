@@ -87,11 +87,20 @@ describe("DestructiveActionDialog", () => {
     const action = screen.getByRole("button", { name: "Delete site" });
     await user.dblClick(action);
     expect(onAction).toHaveBeenCalledTimes(1);
-    expect(action).toBeDisabled();
+    expect(action).toHaveAttribute("aria-busy", "true");
+    expect(action).toHaveAttribute("aria-disabled", "true");
+    expect(action).toHaveFocus();
+    await user.keyboard("{Enter} ");
+    await user.click(action);
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     resolveAction?.(true);
-    expect(await screen.findByRole("button", { name: "Delete site" })).toBeEnabled();
+    await waitFor(() => {
+      expect(action).not.toHaveAttribute("aria-busy", "true");
+      expect(action).not.toHaveAttribute("aria-disabled", "true");
+    });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

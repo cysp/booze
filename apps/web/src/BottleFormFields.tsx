@@ -84,11 +84,11 @@ export function BottleTextInput({
       autoComplete="off"
       htmlName={field.name}
       isDisabled={disabled}
-      description={description}
+      {...(description === undefined ? {} : { description })}
       isRequired={required}
       label={label}
-      placeholder={placeholder}
-      status={status}
+      {...(placeholder === undefined ? {} : { placeholder })}
+      {...(status === undefined ? {} : { status })}
       value={field.value}
       onBlur={field.onBlur}
       onChange={field.onChange}
@@ -113,8 +113,8 @@ export function BottleTextArea({
       isDisabled={disabled}
       isRequired={required}
       label={label}
-      placeholder={placeholder}
-      status={status}
+      {...(placeholder === undefined ? {} : { placeholder })}
+      {...(status === undefined ? {} : { status })}
       value={field.value}
       onBlur={field.onBlur}
       onChange={field.onChange}
@@ -133,7 +133,12 @@ function useBottleField({ control, label, name, required, disabled }: BottleForm
     status:
       fieldState.error === undefined
         ? undefined
-        : { message: fieldState.error.message, type: "error" as const },
+        : {
+            ...(fieldState.error.message === undefined
+              ? {}
+              : { message: fieldState.error.message }),
+            type: "error" as const,
+          },
   };
 }
 

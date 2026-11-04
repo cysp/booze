@@ -1,6 +1,5 @@
-/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call -- Astryx CLI consumes this typed theme source and emits checked runtime artifacts. */
 import { defineTheme } from "@astryxdesign/core/theme";
-import { neutralTheme } from "@astryxdesign/theme-neutral";
+import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 
 export const boozeTheme = defineTheme({
   name: "booze",

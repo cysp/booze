@@ -162,11 +162,9 @@ export function CaptureArea({
                 autoComplete="off"
                 htmlName="capturePosition"
                 isDisabled={form.storageLocationId === ""}
-                description={
-                  form.storageLocationId === ""
-                    ? "Choose a location to add a position note."
-                    : undefined
-                }
+                {...(form.storageLocationId === ""
+                  ? { description: "Choose a location to add a position note." }
+                  : {})}
                 label="Position note"
                 placeholder="Row 3, slot 2"
                 value={form.position}

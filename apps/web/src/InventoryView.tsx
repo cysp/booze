@@ -157,7 +157,7 @@ export function InventoryArea({
           hasClear
           htmlName="drinkStatusFilter"
           label="Drink status"
-          options={drinkStatusOptions}
+          options={[...drinkStatusOptions]}
           placeholder="All statuses"
           value={drinkStatusFilter}
           onChange={(value: string | null) => {

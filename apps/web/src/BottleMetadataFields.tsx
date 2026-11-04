@@ -51,11 +51,9 @@ export function CriticReviewFields({
                     isRequired
                     label="Source"
                     placeholder="Halliday Wine Companion"
-                    status={
-                      error?.reviewSourceName === undefined
-                        ? undefined
-                        : { message: error.reviewSourceName, type: "error" }
-                    }
+                    {...(error?.reviewSourceName === undefined
+                      ? {}
+                      : { status: { message: error.reviewSourceName, type: "error" } })}
                     value={review.reviewSourceName ?? ""}
                     onChange={(value: string) => {
                       update(index, { reviewSourceName: value, reviewSourceId: undefined });
@@ -68,11 +66,9 @@ export function CriticReviewFields({
                     isRequired
                     label="Rating"
                     placeholder="95 points"
-                    status={
-                      error?.ratingText === undefined
-                        ? undefined
-                        : { message: error.ratingText, type: "error" }
-                    }
+                    {...(error?.ratingText === undefined
+                      ? {}
+                      : { status: { message: error.ratingText, type: "error" } })}
                     value={review.ratingText}
                     onChange={(value: string) => {
                       update(index, { ratingText: value });
@@ -278,8 +274,8 @@ function AwardTextInput({
       htmlName={htmlName}
       isRequired={isRequired}
       label={label}
-      placeholder={placeholder}
-      status={error === undefined ? undefined : { message: error, type: "error" }}
+      {...(placeholder === undefined ? {} : { placeholder })}
+      {...(error === undefined ? {} : { status: { message: error, type: "error" } })}
       value={value}
       onChange={onChange}
     />

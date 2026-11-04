@@ -160,7 +160,7 @@ function createReviewSourceUpsert({
   readonly database: BoozeDatabase;
   readonly input: ReviewSourceInput;
   readonly reviewSourceId: string;
-}): ReturnType<ReturnType<BoozeDatabase["insert"]>["values"]> {
+}): ReviewStatement {
   const name = input.name.trim();
   return database
     .insert(reviewSources)
@@ -375,7 +375,7 @@ function createCriticReviewUpsert({
   readonly siteId: string;
   readonly userId: string;
   readonly wineVintageId: string;
-}): ReturnType<ReturnType<BoozeDatabase["insert"]>["values"]> {
+}): ReviewStatement {
   const statement = database.insert(criticReviews).values({
     id: reviewId,
     siteId,
