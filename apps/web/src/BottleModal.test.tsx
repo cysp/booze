@@ -126,7 +126,8 @@ describe("BottleModal destructive actions", () => {
     },
   );
 
-  it("does not offer a position note until a storage location is chosen", () => {
+  it("does not offer a position note until a storage location is chosen", async () => {
+    const user = userEvent.setup();
     const item = inventoryItemFixture({ locationId: null, location: null, position: null });
     render(
       <BottleModal
@@ -140,7 +141,11 @@ describe("BottleModal destructive actions", () => {
         onSubmit={submitBottle}
       />,
     );
-    expect(screen.getByRole("textbox", { name: "Position note" })).toBeDisabled();
+    const position = screen.getByRole("textbox", { name: "Position note" });
+    expect(position).toHaveAttribute("aria-disabled", "true");
+    expect(position).toHaveAttribute("readonly");
+    await user.type(position, "unavailable edit");
+    expect(position).toHaveValue("");
     expect(screen.getByText("Choose a location to add a position note.")).toBeVisible();
   });
 
@@ -211,6 +216,8 @@ describe("BottleModal destructive actions", () => {
     await user.click(screen.getByRole("button", { name: "Save bottle" }));
     const winery = screen.getByRole("textbox", { name: /Winery/iu });
     expect(winery).toBeDisabled();
+    await user.type(winery, "unavailable edit");
+    expect(winery).toHaveValue(item.wineryName ?? "");
     expect(screen.getByRole("button", { name: "Mark drunk" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete bottle" })).toBeDisabled();
     const form = winery.closest("form");
@@ -431,8 +438,14 @@ describe("BottleModal wine identity", () => {
         onSubmit={onSubmit}
       />,
     );
-    expect(screen.getByRole("textbox", { name: "Winery" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "Bottle notes" })).toBeEnabled();
+    const winery = screen.getByRole("textbox", { name: "Winery" });
+    expect(winery).toHaveAttribute("aria-disabled", "true");
+    expect(winery).toHaveAttribute("readonly");
+    await user.type(winery, "unavailable edit");
+    expect(winery).toHaveValue(item.wineryName ?? "");
+    const notes = screen.getByRole("textbox", { name: "Bottle notes" });
+    expect(notes).not.toHaveAttribute("aria-disabled", "true");
+    expect(notes).not.toHaveAttribute("readonly");
     await chooseSharedWineEdit(user);
     expect(screen.getByText("Corrections will update all 7 linked bottles.")).toBeVisible();
     await user.type(screen.getByRole("textbox", { name: "Designation (optional)" }), " Reserve");

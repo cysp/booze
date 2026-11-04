@@ -90,7 +90,7 @@ export function LocationCreateForm({
           label="Site"
           options={sites.map((site) => ({ label: site.site, value: site.siteId }))}
           placeholder={sites.length === 0 ? "Create a site first" : "Select site"}
-          status={siteError === null ? undefined : { message: siteError, type: "error" }}
+          {...(siteError === null ? {} : { status: { message: siteError, type: "error" } })}
           value={form.siteId}
           onChange={(value: string) => {
             const site = sites.find((candidate) => candidate.siteId === value);
@@ -104,7 +104,7 @@ export function LocationCreateForm({
           hasClear
           htmlName="parentLocationId"
           description="Choose a containing location only when this is a smaller place inside it."
-          disabledMessage={form.siteId === "" ? "Select a site first." : undefined}
+          {...(form.siteId === "" ? { disabledMessage: "Select a site first." } : {})}
           isDisabled={form.siteId === ""}
           label="Inside"
           options={siteLocations.map((location) => ({
@@ -124,7 +124,7 @@ export function LocationCreateForm({
         isRequired
         label="New location"
         placeholder="Left rack"
-        status={nameError === null ? undefined : { message: nameError, type: "error" }}
+        {...(nameError === null ? {} : { status: { message: nameError, type: "error" } })}
         value={form.location}
         onChange={(value: string) => {
           updateLocationField("location", value);

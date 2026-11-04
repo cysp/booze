@@ -147,11 +147,9 @@ function LocationArea({
                     htmlName="locationName"
                     isRequired
                     label="Location display name"
-                    status={
-                      rename.error?.key === location.locationId
-                        ? { message: rename.error.message, type: "error" }
-                        : undefined
-                    }
+                    {...(rename.error?.key === location.locationId
+                      ? { status: { message: rename.error.message, type: "error" } }
+                      : {})}
                     value={editor.name}
                     onChange={(value: string) => {
                       setRename(value);
@@ -316,7 +314,7 @@ function SiteArea({
           isRequired
           label="Site"
           placeholder="Home"
-          status={siteError === null ? undefined : { message: siteError, type: "error" }}
+          {...(siteError === null ? {} : { status: { message: siteError, type: "error" } })}
           value={form.site}
           onChange={(value: string) => {
             updateSiteField("site", value);
@@ -360,11 +358,9 @@ function SiteArea({
                     htmlName="siteName"
                     isRequired
                     label="Site display name"
-                    status={
-                      rename.error?.key === site.siteId
-                        ? { message: rename.error.message, type: "error" }
-                        : undefined
-                    }
+                    {...(rename.error?.key === site.siteId
+                      ? { status: { message: rename.error.message, type: "error" } }
+                      : {})}
                     value={editor.name}
                     onChange={(value: string) => {
                       setRename(value);

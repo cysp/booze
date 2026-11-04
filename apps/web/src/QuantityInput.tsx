@@ -18,7 +18,7 @@ export function QuantityInput({
 }): ReactElement {
   return (
     <TextInput
-      ref={ref}
+      {...(ref === undefined ? {} : { ref })}
       hasClear
       isRequired
       htmlName="quantity"
@@ -27,7 +27,14 @@ export function QuantityInput({
       label="Quantity"
       description={`Between ${MIN_BOTTLE_QUANTITY} and ${MAX_BOTTLE_QUANTITY} bottles.`}
       value={value}
-      status={status}
+      {...(status === undefined
+        ? {}
+        : {
+            status: {
+              type: status.type,
+              ...(status.message === undefined ? {} : { message: status.message }),
+            },
+          })}
       onChange={onChange}
       onBlur={onBlur}
     />

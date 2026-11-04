@@ -225,7 +225,7 @@ async function failDestructiveAction(
   await action.focus();
   await action.press("Enter");
   await expect(dialog.getByRole("alert")).toContainText(failureMessage);
-  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByRole("alert").filter({ hasText: /\S/u })).toHaveCount(1);
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await expect(dialog).toBeVisible();
   await expectNoAxeViolations(page);
@@ -387,11 +387,16 @@ test("keeps failed editor values and rejects malformed award numbers", async ({ 
   await dialog.getByRole("button", { name: "Add award" }).click();
   await dialog.locator("[name='awards.0.awardLevel']").fill("Gold");
   await dialog.locator("[name='awards.0.awardName']").fill("Browser show");
-  await dialog.locator("[name='awards.0.points']").fill("0x10");
+  const awardPoints = dialog.locator("[name='awards.0.points']");
+  await awardPoints.fill("0x10");
   await dialog.getByRole("button", { name: "Save bottle" }).click();
-  await expect(dialog.getByText("Points must be a decimal number.")).toBeVisible();
+  await expect(awardPoints).toHaveAttribute("aria-invalid", "true");
+  await expect(awardPoints).toHaveAccessibleDescription("Points must be a decimal number.");
+  await expect(
+    dialog.locator(".astryx-field-status", { hasText: /^Points must be a decimal number\.$/u }),
+  ).toBeVisible();
 
-  await dialog.locator("[name='awards.0.points']").fill("95");
+  await awardPoints.fill("95");
   await dialog.getByRole("button", { name: "Save bottle" }).click();
   await expect(
     dialog.getByRole("alert").filter({ hasText: "Bottle was not updated." }),
@@ -606,7 +611,7 @@ test("recovers from a rejected cold workspace chunk", async ({ page }) => {
     name: "Cellar workspace could not be loaded",
   });
   await expect(recovery).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByRole("alert").filter({ hasText: /\S/u })).toHaveCount(1);
   await expect(recovery.getByRole("button", { name: "Retry" })).toBeFocused();
   await expectNoAxeViolations(page);
 
@@ -774,7 +779,7 @@ test.describe("phone theme", () => {
     const dialog = page.getByRole("alertdialog", { name: "Delete this bottle?" });
     await dialog.getByRole("button", { name: "Delete bottle" }).click();
     await expect(dialog.getByRole("alert")).toContainText("Bottle was not deleted");
-    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("alert").filter({ hasText: /\S/u })).toHaveCount(1);
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
     await expectNoAxeViolations(page);
     await page.screenshot({ path: testInfo.outputPath("phone-destructive-error.png") });

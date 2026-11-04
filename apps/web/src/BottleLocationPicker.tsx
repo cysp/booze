@@ -53,14 +53,12 @@ export function BottleLocationPicker({
           ? "Choose the site, or the most specific known place."
           : selectedStorageLocation.locationType
       }
-      disabledMessage={
-        selectableSites.length === 0
-          ? "Create a site before assigning a bottle location."
-          : undefined
-      }
+      {...(selectableSites.length === 0
+        ? { disabledMessage: "Create a site before assigning a bottle location." }
+        : {})}
       isDisabled={selectableSites.length === 0}
       label="Bottle location"
-      options={options}
+      options={[...options]}
       placeholder={sites.length === 0 ? "Create a site first" : "Choose site or location"}
       value={selectedValue}
       onChange={(value: string) => {

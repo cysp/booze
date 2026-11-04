@@ -34,7 +34,6 @@ const ClerkApp = lazy(async () => {
 
 createRoot(rootElement).render(
   <StrictMode>
-    {/* oxlint-disable-next-line typescript/no-unsafe-assignment -- The CLI-generated declaration provides the runtime theme type. */}
     <Theme mode="system" theme={boozeTheme}>
       {(publishableKey === undefined && isLocalDevHost) || forceDevelopmentAuth ? (
         <App authMode="development" />

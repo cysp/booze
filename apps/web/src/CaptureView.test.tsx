@@ -264,13 +264,18 @@ describe("CaptureArea photo picker", () => {
     const deleteAction = within(dialog).getByRole("button", { name: "Delete capture" });
     await user.click(deleteAction);
     expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(deleteAction).toBeDisabled();
+    expect(deleteAction).toHaveAttribute("aria-busy", "true");
+    expect(deleteAction).toHaveAttribute("aria-disabled", "true");
+    await user.click(deleteAction);
+    await user.keyboard("{Enter} ");
+    expect(onDelete).toHaveBeenCalledTimes(1);
 
     resolveDelete?.(false);
     expect(await screen.findByText("Delete failed. Try again.")).toBeVisible();
     expect(dialog).toBeVisible();
     await waitFor(() => {
-      expect(deleteAction).toBeEnabled();
+      expect(deleteAction).not.toHaveAttribute("aria-busy", "true");
+      expect(deleteAction).not.toHaveAttribute("aria-disabled", "true");
     });
   });
 });
@@ -476,7 +481,10 @@ it.each([0, 1])(
     expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue(
       "My unsaved correction",
     );
-    expect(screen.getByRole("textbox", { name: "Producer / winery" })).toBeDisabled();
+    expect(producer).toHaveAttribute("aria-disabled", "true");
+    expect(producer).toHaveAttribute("readonly");
+    await user.type(producer, "unavailable edit");
+    expect(producer).toHaveValue("My unsaved correction");
     expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
     rerender(
@@ -533,7 +541,11 @@ it("retains a local draft for reference when another editor imports the capture"
   expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue(
     "Unsubmitted bottle correction",
   );
-  expect(screen.getByRole("textbox", { name: "Bottle notes" })).toBeDisabled();
+  const notes = screen.getByRole("textbox", { name: "Bottle notes" });
+  expect(notes).toHaveAttribute("aria-disabled", "true");
+  expect(notes).toHaveAttribute("readonly");
+  await user.type(notes, "unavailable edit");
+  expect(notes).toHaveValue("Unsubmitted bottle correction");
   expect(screen.getByText(/was imported elsewhere/u)).toBeVisible();
   expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
 });
