@@ -67,8 +67,8 @@ importers:
         specifier: 1.0.0-rc.5
         version: 1.0.0-rc.5(@cloudflare/workers-types@5.20261103.1)(zod@4.6.7)
       hono:
-        specifier: 4.13.16
-        version: 4.13.16
+        specifier: 4.13.17
+        version: 4.13.17
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -2049,8 +2049,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.16:
-    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
+  hono@4.13.17:
+    resolution: {integrity: sha512-vZIcbkvjOR5hHRWERbGkr8fGfF0GGM1ooYkuH448iO3b2AdVEr3AXZSw4Z3Kn+1L5z0CVoVeyV29VGYmFh05kQ==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@7.0.0:
@@ -3428,9 +3428,9 @@ snapshots:
 
   '@formatjs/icu-skeleton-parser@2.1.11': {}
 
-  '@hono/node-server@2.1.6(hono@4.13.16)':
+  '@hono/node-server@2.1.6(hono@4.13.17)':
     dependencies:
-      hono: 4.13.16
+      hono: 4.13.17
 
   '@img/colour@1.1.0': {}
 
@@ -3564,7 +3564,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.2(supports-color@10.2.2)(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.1.6(hono@4.13.16)
+      '@hono/node-server': 2.1.6(hono@4.13.17)
       ajv: 8.20.0
       ajv-formats: 3.0.1
       content-type: 1.0.5
@@ -3574,7 +3574,7 @@ snapshots:
       eventsource-parser: 3.1.1
       express: 5.3.0(supports-color@10.2.2)
       express-rate-limit: 8.7.3(express@5.3.0(supports-color@10.2.2))(supports-color@10.2.2)
-      hono: 4.13.16
+      hono: 4.13.17
       jose: 6.2.15
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -4310,7 +4310,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.16: {}
+  hono@4.13.17: {}
 
   html-encoding-sniffer@7.0.0:
     dependencies:
