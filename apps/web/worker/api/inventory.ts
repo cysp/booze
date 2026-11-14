@@ -13,56 +13,15 @@ import {
 } from "@chikachow/booze-db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
+import { z } from "zod";
 
 import { listCriticReviews, type CriticReviewResource } from "./critic-reviews.ts";
 import { listWineAwards, type WineAwardResource } from "./wine-awards.ts";
 
 export type DrinkStatus = "drink-now" | "drink-soon" | "hold" | "past-window" | "unknown";
 
-export type BottleResource = {
-  readonly id: string;
-  readonly wineVintageId: string;
-  readonly siteId: string;
-  readonly siteName: string;
-  readonly storageLocationId: string | null;
-  readonly storageLocationName: string | null;
-  readonly positionHint: string | null;
-  readonly status: string;
-  readonly bottleNumber: string | null;
-  readonly volumeMl: number;
-  readonly barcode: string | null;
-  readonly lotCode: string | null;
-  readonly bottleNotes: string | null;
-  readonly wineryId: string | null;
-  readonly wineryName: string;
-  readonly brandName: string | null;
-  readonly baseName: string;
-  readonly designation: string | null;
-  readonly displayName: string;
-  readonly vintageYear: number | null;
-  readonly vintageLabel: string;
-  readonly vintageStatus: "year" | "non_vintage" | "unknown";
-  readonly wineBottleCount: number;
-  readonly grapeVarieties: readonly string[];
-  readonly country: string | null;
-  readonly region: string | null;
-  readonly appellation: string | null;
-  readonly classification: string | null;
-  readonly wineType: string | null;
-  readonly wineColor: string | null;
-  readonly addressQualification: string | null;
-  readonly alcoholPercent: number | null;
-  readonly drinkFromYear: number | null;
-  readonly drinkToYear: number | null;
-  readonly description: string | null;
-  readonly drinkingAdvice: string | null;
-  readonly labelText: string | null;
-  readonly sourceUrl: string | null;
-  readonly wineNotes: string | null;
-  readonly criticReviews: readonly CriticReviewResource[];
-  readonly awards: readonly WineAwardResource[];
-  readonly createdAt: string;
-};
+import type { BottleResource } from "../../shared/catalogue-resources.ts";
+export type { BottleResource } from "../../shared/catalogue-resources.ts";
 
 export type BottleWithDrinkStatus = BottleResource & {
   readonly drinkStatus: DrinkStatus;
@@ -116,7 +75,9 @@ export async function listBottles({
   const grapeVarietiesByWine = database
     .select({
       wineVintageId: wineConstituents.wineVintageId,
-      grapeVarieties: sql<string | null>`group_concat(${grapeVarieties.name})`.as(
+      grapeVarieties: sql<
+        string | null
+      >`json_group_array(${grapeVarieties.name} order by ${grapeVarieties.name})`.as(
         "grape_varieties",
       ),
     })
@@ -205,9 +166,7 @@ export async function listBottles({
     criticReviews: criticReviewsByWine.get(row.wineVintageId) ?? [],
     awards: awardsByWine.get(row.wineVintageId) ?? [],
     grapeVarieties:
-      row.grapeVarieties === null
-        ? []
-        : row.grapeVarieties.split(",").filter((value) => value !== ""),
+      row.grapeVarieties === null ? [] : z.array(z.string()).parse(JSON.parse(row.grapeVarieties)),
   }));
 }
 

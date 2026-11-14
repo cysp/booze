@@ -46,7 +46,10 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
       context: { database, userId: authenticatedUser.userId, source: "http" },
       input: payload,
     });
-    return created(result.after, locationHeader(`/api/storage-locations/${result.after.id}`));
+    return created(
+      result.after,
+      locationHeader(`/api/storage-locations/${encodeURIComponent(result.after.id)}`),
+    );
   })
   .patch("/storage-locations/:storageLocationId", async (context) => {
     const payload = updateStorageLocationInputSchema.parse(await readRequestJson(context.req.raw));
@@ -79,15 +82,7 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
     return noContent();
   });
 
-type StorageLocationListRow = {
-  readonly id: string;
-  readonly siteId: string;
-  readonly siteName: string;
-  readonly parentId: string | null;
-  readonly name: string;
-  readonly locationType: string;
-  readonly bottleCount: number;
-};
+import type { StorageLocationResource } from "../../shared/catalogue-resources.ts";
 
 async function listStorageLocations({
   database,
@@ -95,7 +90,7 @@ async function listStorageLocations({
 }: {
   readonly database: BoozeDatabase;
   readonly userId: string;
-}): Promise<readonly StorageLocationListRow[]> {
+}): Promise<readonly StorageLocationResource[]> {
   const rows = await database
     .select({
       id: storageLocations.id,
@@ -150,7 +145,7 @@ function storageLocationDisplayName({
   byId,
   locationId,
 }: {
-  readonly byId: ReadonlyMap<string, StorageLocationListRow>;
+  readonly byId: ReadonlyMap<string, StorageLocationResource>;
   readonly locationId: string;
 }): string {
   const row = byId.get(locationId);

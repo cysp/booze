@@ -15,44 +15,12 @@ import {
   formatWineDisplayName,
   vintageLabel,
   wineVintageStatus,
-  type VintageStatus,
 } from "../../shared/wine-identity.ts";
 
-export type WineInput = {
-  readonly wineryName: string;
-  readonly brandName?: string | null | undefined;
-  readonly baseName?: string | null | undefined;
-  readonly designation?: string | null | undefined;
-  readonly displayName?: string | null | undefined;
-  readonly vintageYear?: number | null | undefined;
-  readonly vintageStatus?: VintageStatus | undefined;
-  readonly grapeVarieties?: readonly string[] | undefined;
-  readonly country?: string | null | undefined;
-  readonly region?: string | null | undefined;
-  readonly appellation?: string | null | undefined;
-  readonly classification?: string | null | undefined;
-  readonly wineType?: string | null | undefined;
-  readonly wineColor?: string | null | undefined;
-  readonly addressQualification?: string | null | undefined;
-  readonly alcoholPercent?: number | null | undefined;
-  readonly drinkFromYear?: number | null | undefined;
-  readonly drinkToYear?: number | null | undefined;
-  readonly description?: string | null | undefined;
-  readonly drinkingAdvice?: string | null | undefined;
-  readonly labelText?: string | null | undefined;
-  readonly sourceUrl?: string | null | undefined;
-  readonly notes?: string | null | undefined;
-};
+export type { BottleInput, WineInput } from "../../shared/catalogue-inputs.ts";
+import type { BottleInput, WineInput } from "../../shared/catalogue-inputs.ts";
 
 type WineUpdates = { readonly [Key in keyof WineInput]?: WineInput[Key] | undefined };
-
-export type BottleInput = {
-  readonly bottleNumber?: string | undefined;
-  readonly volumeMl?: number | undefined;
-  readonly barcode?: string | undefined;
-  readonly lotCode?: string | undefined;
-  readonly notes?: string | undefined;
-};
 
 export type UpsertVintageResult = {
   readonly wineryId: string | null;

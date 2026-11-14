@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { entityIdSchema } from "../../shared/entity-id.ts";
 
 export const drinkStatusSchema = z.enum([
   "drink-now",
@@ -27,32 +28,18 @@ const paginationInputSchema = {
     .describe("Opaque token from a previous page. Pass it back unchanged to fetch the next page."),
 };
 
-const siteIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe("Authorised storage site ID returned by cellar.list_sites or other cellar tools.");
-const storageLocationIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe(
-    "MCP storage location ID returned as storageLocationId by cellar.list_storage_locations.",
-  );
-const wineIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe("MCP wine vintage ID returned as wineId by cellar.list_wines or bottle summary tools.");
-const bottleIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe("Bottle ID returned as bottleId by wine search, list, or queue tools.");
+const siteIdInputSchema = entityIdSchema.describe(
+  "Canonical stored authorised storage site ID returned by cellar.list_sites or other cellar tools.",
+);
+const storageLocationIdInputSchema = entityIdSchema.describe(
+  "Canonical stored storage location ID returned as storageLocationId by cellar.list_storage_locations.",
+);
+const wineIdInputSchema = entityIdSchema.describe(
+  "Canonical stored wine vintage ID returned as wineId by cellar.list_wines or bottle summary tools.",
+);
+const bottleIdInputSchema = entityIdSchema.describe(
+  "Canonical stored bottle ID returned as bottleId by wine search, list, or queue tools.",
+);
 const searchQueryInputSchema = z
   .string()
   .trim()
@@ -60,18 +47,12 @@ const searchQueryInputSchema = z
   .max(200)
   .describe("Case-insensitive text to match against display names and searchable fields.");
 const drinkYearInputSchema = z.number().int().min(1800).max(2200);
-const reviewSourceIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe("MCP review source ID returned by cellar.list_review_sources.");
-const criticReviewIdInputSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .describe("MCP critic review ID returned by cellar.list_critic_reviews.");
+const reviewSourceIdInputSchema = entityIdSchema.describe(
+  "Canonical stored review source ID returned by cellar.list_review_sources.",
+);
+const criticReviewIdInputSchema = entityIdSchema.describe(
+  "Canonical stored critic review ID returned by cellar.list_critic_reviews.",
+);
 
 export const searchBottlesInputSchema = z.strictObject({
   query: searchQueryInputSchema.optional(),
@@ -113,7 +94,9 @@ export const createStorageLocationInputSchema = z.strictObject({
   parentStorageLocationId: storageLocationIdInputSchema
     .nullable()
     .optional()
-    .describe("Optional MCP parent storage location ID, or null for a top-level location."),
+    .describe(
+      "Optional canonical stored parent storage location ID, or null for a top-level location.",
+    ),
   name: z.string().trim().min(1).max(120).describe("Storage location name."),
   locationType: z
     .string()
@@ -311,7 +294,7 @@ export const setBottleLocationInputSchema = z.strictObject({
   bottleId: bottleIdInputSchema,
   storageLocationId: storageLocationIdInputSchema
     .nullable()
-    .describe("MCP storage location ID, or null to clear the bottle location."),
+    .describe("Canonical stored storage location ID, or null to clear the bottle location."),
   position: z
     .string()
     .trim()
@@ -328,15 +311,15 @@ export const markBottleConsumedInputSchema = z.strictObject({
 const nullableStringSchema = z.string().nullable();
 const nullableNumberSchema = z.number().nullable();
 const nullableYearSchema = z.number().int().min(1800).max(2200).nullable();
-const siteIdOutputSchema = z.string().describe("Authorised storage site ID.");
-const wineIdOutputSchema = z.string().describe("MCP wine vintage ID.");
-const wineryIdOutputSchema = z.string().describe("MCP winery ID.");
+const siteIdOutputSchema = z.string().describe("Canonical stored authorised storage site ID.");
+const wineIdOutputSchema = z.string().describe("Canonical stored wine vintage ID.");
+const wineryIdOutputSchema = z.string().describe("Canonical stored winery ID.");
 const storageLocationIdOutputSchema = z
   .string()
   .nullable()
-  .describe("MCP storage location ID, or null when unset.");
-const reviewSourceIdOutputSchema = z.string().describe("MCP review source ID.");
-const criticReviewIdOutputSchema = z.string().describe("MCP critic review ID.");
+  .describe("Canonical stored storage location ID, or null when unset.");
+const reviewSourceIdOutputSchema = z.string().describe("Canonical stored review source ID.");
+const criticReviewIdOutputSchema = z.string().describe("Canonical stored critic review ID.");
 
 export const bottleOutputSchema = {
   addressQualification: nullableStringSchema,
@@ -432,7 +415,7 @@ export const storageLocationSummarySchema = z.object({
   site: z.string(),
   siteId: siteIdOutputSchema,
   storageLocation: z.string(),
-  storageLocationId: z.string().describe("MCP storage location ID."),
+  storageLocationId: z.string().describe("Canonical stored storage location ID."),
   storageLocationType: z.string(),
 });
 

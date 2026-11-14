@@ -189,7 +189,7 @@ export function useBottleController({
     readonly payload: BottlePatch;
   }): Promise<BottleModalSubmitResult> {
     setStatus("Updating bottle...");
-    const response = await fetch(`/api/bottles/${bottleId}`, {
+    const response = await fetch(`/api/bottles/${encodeURIComponent(bottleId)}`, {
       method: "PATCH",
       headers: jsonHeaders(await getAuthHeaders()),
       body: JSON.stringify(payload),
@@ -214,7 +214,7 @@ export function useBottleController({
 
   async function deleteBottle(bottleId: string): Promise<boolean> {
     setStatus("Deleting bottle...");
-    const response = await fetch(`/api/bottles/${bottleId}`, {
+    const response = await fetch(`/api/bottles/${encodeURIComponent(bottleId)}`, {
       method: "DELETE",
       headers: await getAuthHeaders(),
     });
@@ -233,7 +233,7 @@ export function useBottleController({
     setIsSaving(true);
     try {
       const updated = await patchBottle({
-        bottleId: editingBottle.bottleId,
+        bottleId: editingBottle.id,
         payload: bottleEditPayload(submission, editingBottle),
       });
       if (updated.ok) {
@@ -254,8 +254,8 @@ export function useBottleController({
     setAddFormDefaults((current) => ({
       ...current,
       siteId: location.siteId,
-      site: location.site,
-      storageLocationId: location.locationId,
+      site: location.siteName,
+      storageLocationId: location.id,
       location: locationPath(location, locations),
       position: "",
     }));
@@ -416,7 +416,7 @@ export function useCaptureController({
 
   async function retryCapture(captureId: string): Promise<boolean> {
     setStatus("Retrying capture...");
-    const response = await fetch(`/api/bottle-captures/${captureId}/retry`, {
+    const response = await fetch(`/api/bottle-captures/${encodeURIComponent(captureId)}/retry`, {
       method: "POST",
       headers: await getAuthHeaders(),
     });
@@ -435,7 +435,7 @@ export function useCaptureController({
   ): Promise<CaptureImportResult> {
     setStatus("Importing capture...");
     try {
-      const response = await fetch(`/api/bottle-captures/${captureId}/import`, {
+      const response = await fetch(`/api/bottle-captures/${encodeURIComponent(captureId)}/import`, {
         method: "POST",
         headers: jsonHeaders(await getAuthHeaders()),
         body: JSON.stringify({
@@ -468,7 +468,7 @@ export function useCaptureController({
     setStatus("Saving capture corrections...");
     let reviewRevision: number;
     try {
-      const response = await fetch(`/api/bottle-captures/${captureId}/review`, {
+      const response = await fetch(`/api/bottle-captures/${encodeURIComponent(captureId)}/review`, {
         method: "PATCH",
         headers: jsonHeaders(await getAuthHeaders()),
         body: JSON.stringify({ expectedRevision, candidate }),
@@ -509,7 +509,7 @@ export function useCaptureController({
 
   async function deleteCapture(captureId: string): Promise<boolean> {
     setStatus("Deleting capture...");
-    const response = await fetch(`/api/bottle-captures/${captureId}`, {
+    const response = await fetch(`/api/bottle-captures/${encodeURIComponent(captureId)}`, {
       method: "DELETE",
       headers: await getAuthHeaders(),
     });
@@ -642,15 +642,15 @@ function useDefaultSite<T extends FormState | CaptureFormState | LocationFormSta
   setForm: Dispatch<SetStateAction<T>>,
 ): void {
   useEffect(() => {
-    const writableSiteIds = new Set(writableSites.map((site) => site.siteId));
+    const writableSiteIds = new Set(writableSites.map((site) => site.id));
     const defaultSite = writableSites[0];
     setForm((current) =>
       writableSiteIds.has(current.siteId)
         ? current
         : {
             ...current,
-            siteId: defaultSite?.siteId ?? "",
-            site: defaultSite?.site ?? "",
+            siteId: defaultSite?.id ?? "",
+            site: defaultSite?.name ?? "",
             storageLocationId: "",
             location: "",
             ...("parentLocationId" in current ? { parentLocationId: "" } : {}),

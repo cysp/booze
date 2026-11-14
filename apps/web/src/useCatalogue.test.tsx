@@ -41,7 +41,7 @@ describe("useCatalogue", () => {
       expect(result.current.isLoading).toBe(false);
     });
     expect(result.current.items).toEqual([]);
-    expect(result.current.wines).toEqual([wine]);
+    expect(result.current.wines.map((option) => option.wineVintageId)).toEqual(["depleted-wine"]);
     failWines = true;
     await act(async () =>
       result.current.completeMutation({ refresh: "catalogue", successMessage: "Saved." }),
@@ -50,7 +50,7 @@ describe("useCatalogue", () => {
       collection: "wines",
       message: "Wines could not be refreshed. Try again.",
     });
-    expect(result.current.wines).toEqual([wine]);
+    expect(result.current.wines.map((option) => option.wineVintageId)).toEqual(["depleted-wine"]);
     await act(async () =>
       result.current.completeMutation({ refresh: "captures", successMessage: "Capture saved." }),
     );
@@ -81,6 +81,95 @@ describe("useCatalogue", () => {
       { collection: "wines", message: "Wines could not be refreshed. Try again." },
     ]);
   });
+
+  it("preserves historical saved review values without applying new-entry limits on reads", async () => {
+    const reviewCandidate = {
+      wine: {
+        wineryName: "Historical estate",
+        designation: null,
+        baseName: null,
+        displayName: null,
+        alcoholPercent: 140,
+        vintageYear: 1700,
+      },
+      bottle: { volumeMl: 75000 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const request = requestPath(input);
+        return jsonResponse(
+          request === "/api/bottle-captures"
+            ? [{ ...captures[0], reviewCandidate }]
+            : (dataByPath.get(request) ?? []),
+        );
+      }),
+    );
+    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.refreshIssues).toEqual([]);
+    expect(result.current.captures[0]?.reviewCandidate).toEqual(reviewCandidate);
+  });
+
+  it.each([
+    {
+      collection: "inventory",
+      path: "/api/bottles",
+      malformed: { ...bottles[0], volumeMl: "750" },
+    },
+    {
+      collection: "inventory",
+      path: "/api/bottles",
+      malformed: { ...bottles[0], grapeVarieties: [7] },
+    },
+    {
+      collection: "locations",
+      path: "/api/storage-locations",
+      malformed: { ...locations[0], parentId: 9 },
+    },
+    { collection: "sites", path: "/api/sites", malformed: { ...sites[0], bottleCount: "three" } },
+    {
+      collection: "captures",
+      path: "/api/bottle-captures",
+      malformed: { ...captures[0], images: [{ imageAssetId: "only-one-field" }] },
+    },
+    {
+      collection: "captures",
+      path: "/api/bottle-captures",
+      malformed: {
+        ...captures[0],
+        reviewCandidate: {
+          wine: { wineryName: "Estate", designation: "", alcoholPercent: "thirteen" },
+          bottle: {},
+        },
+      },
+    },
+  ] as const)(
+    "rejects malformed $collection before exposing a claimed resource shape",
+    async ({ collection, path, malformed }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          const request = requestPath(input);
+          return jsonResponse(request === path ? [malformed] : (dataByPath.get(request) ?? []));
+        }),
+      );
+      const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      expect(result.current.refreshIssues.map((issue) => issue.collection)).toEqual([collection]);
+      const loaded = {
+        inventory: result.current.items,
+        locations: result.current.locations,
+        sites: result.current.sites,
+        captures: result.current.captures,
+      };
+      expect(loaded[collection]).toEqual([]);
+    },
+  );
 
   it("keeps a newer capture failure after an older catalogue refresh finishes", async () => {
     let inventoryRequests = 0;

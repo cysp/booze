@@ -14,7 +14,6 @@ import { problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
 import { criticReviewRoutes } from "./routes/critic-reviews.ts";
 import { registerCriticReviewTools } from "./mcp/critic-reviews.ts";
-import { mcpEntityId } from "./mcp/ids.ts";
 import { createReviewSourceOutputSchema, upsertCriticReviewOutputSchema } from "./mcp/schemas.ts";
 
 await describe("audited review transactions", async () => {
@@ -62,7 +61,7 @@ await describe("audited review transactions", async () => {
   await it("commits concurrent reviews using the winning new source and review identities", async (context) => {
     const { client, sqlite } = await setup(context, true);
     const input = {
-      wineId: mcpEntityId("wine", "wine"),
+      wineId: "wine",
       reviewSourceName: "Critic",
       ratingText: "95 points",
       provenance: "Verified guide",
@@ -120,7 +119,7 @@ await describe("audited review transactions", async () => {
     sqlite.exec(`INSERT INTO review_sources (id, site_id, name, url, notes)
       VALUES ('legacy-source', 'site', 'Critic', 'https://critic.example', 'Owner verified')`);
     const input = {
-      wineId: mcpEntityId("wine", "wine"),
+      wineId: "wine",
       reviewSourceName: "Critic",
       ratingText: "95 points",
       provenance: "Verified guide",
@@ -132,10 +131,7 @@ await describe("audited review transactions", async () => {
     for (const result of results) {
       assert.notEqual(result.isError, true, JSON.stringify(result));
       const output = upsertCriticReviewOutputSchema.parse(result.structuredContent);
-      assert.equal(
-        output.criticReview.reviewSourceId,
-        mcpEntityId("review_source", "legacy-source"),
-      );
+      assert.equal(output.criticReview.reviewSourceId, "legacy-source");
     }
     assert.deepEqual(
       { ...sqlite.prepare("SELECT id, url, notes FROM review_sources").get() },
@@ -179,7 +175,7 @@ await describe("audited review transactions", async () => {
     assert.equal(httpReview.status, 200, await httpReview.clone().text());
     const mcpReview = await client.callTool({
       name: "cellar.upsert_critic_review",
-      arguments: { wineId: mcpEntityId("wine", "wine"), ...reviewInput },
+      arguments: { wineId: "wine", ...reviewInput },
     });
     assert.notEqual(mcpReview.isError, true, JSON.stringify(mcpReview));
     assert.equal(upsertCriticReviewOutputSchema.parse(mcpReview.structuredContent).changed, false);
@@ -229,11 +225,11 @@ await describe("audited review transactions", async () => {
           ? { siteId: "site", name: "Critic", notes: "Changed" }
           : toolName === "cellar.upsert_critic_review"
             ? {
-                wineId: mcpEntityId("wine", "wine"),
+                wineId: "wine",
                 reviewSourceName: "Critic",
                 ratingText: "97 points",
               }
-            : { criticReviewId: mcpEntityId("critic_review", "review") };
+            : { criticReviewId: "review" };
       const result = await client.callTool({ name: toolName, arguments: input });
       assert.equal(result.isError, true);
       assert.deepEqual(sqlite.prepare("SELECT * FROM critic_reviews").all(), before);
@@ -267,11 +263,11 @@ await describe("audited review transactions", async () => {
           ? { siteId: "site", name: "Critic", notes: "Saved source" }
           : toolName === "cellar.upsert_critic_review"
             ? {
-                wineId: mcpEntityId("wine", "wine"),
+                wineId: "wine",
                 reviewSourceName: "Critic",
                 ratingText: "97 points",
               }
-            : { criticReviewId: mcpEntityId("critic_review", "review") };
+            : { criticReviewId: "review" };
       const result = await client.callTool({ name: toolName, arguments: input });
       assert.notEqual(result.isError, true, JSON.stringify(result));
       const event = sqlite
@@ -302,7 +298,7 @@ await describe("audited review transactions", async () => {
         toolName === "cellar.create_review_source"
           ? { siteId: "site", name: "Critic" }
           : {
-              wineId: mcpEntityId("wine", "wine"),
+              wineId: "wine",
               reviewSourceName: "Critic",
               ratingText: "95 points",
             };
@@ -328,7 +324,7 @@ await describe("audited review transactions", async () => {
         toolName === "cellar.create_review_source"
           ? { siteId: "site", name: "Critic" }
           : {
-              wineId: mcpEntityId("wine", "wine"),
+              wineId: "wine",
               reviewSourceName: "Critic",
               ratingText: "95 points",
             };
@@ -357,7 +353,7 @@ await describe("audited review transactions", async () => {
     const result = await client.callTool({
       name: "cellar.upsert_critic_review",
       arguments: {
-        wineId: mcpEntityId("wine", "wine"),
+        wineId: "wine",
         reviewSourceName: "Critic",
         ratingText: "95 points",
       },

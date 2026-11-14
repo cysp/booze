@@ -11,7 +11,6 @@ import { z } from "zod";
 import { problemResponseForError } from "./api/http.ts";
 import { calculateDrinkStatus } from "./api/inventory.ts";
 import { mcpToolAuditEventInputSchema } from "./mcp/audit.ts";
-import { mcpEntityId } from "./mcp/ids.ts";
 import { decodePageCursor, pageFromRows, rowsAfterCursor, toolJson } from "./mcp/pagination.ts";
 import {
   drinkQueueStatuses,
@@ -339,18 +338,6 @@ await test("MCP in-memory pagination advances past decoded cursor rows", () => {
       cursorForItem: (item) => ({ reviewSourceId: item.id }),
       items,
     }),
-  );
-});
-
-await test("MCP entity IDs are compact and deterministic", () => {
-  assert.equal(mcpEntityId("wine", "vintage_farm-winery-long-human-slug"), "wine_27fbb2xgdxcdb");
-  assert.equal(
-    mcpEntityId("location", "loc_farm-root-left-rack"),
-    mcpEntityId("location", "loc_farm-root-left-rack"),
-  );
-  assert.notEqual(
-    mcpEntityId("wine", "loc_farm-root-left-rack"),
-    mcpEntityId("location", "loc_farm-root-left-rack"),
   );
 });
 

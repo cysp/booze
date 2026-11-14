@@ -34,7 +34,10 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
       secretKey: context.env.CLERK_SECRET_KEY,
     });
     const result = await addBottles({ database, userId, source: "http" }, payload);
-    return created(result, locationHeader(`/api/bottles/${result.bottleIds[0]}`));
+    return created(
+      result,
+      locationHeader(`/api/bottles/${encodeURIComponent(result.bottleIds[0] ?? "")}`),
+    );
   })
   .patch("/bottles/:bottleId", async (context) => {
     const payload = patchBottleSchema.parse(await readRequestJson(context.req.raw));

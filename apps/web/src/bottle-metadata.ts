@@ -30,13 +30,6 @@ export type ValidationResult<T> =
 const INTEGER_PATTERN = /^[+-]?\d+$/u;
 const DECIMAL_PATTERN = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/u;
 
-export function parseGrapeVarieties(value: string): readonly string[] {
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part !== "");
-}
-
 export function criticReviewInputsForItem(
   item: InventoryItem | undefined,
 ): readonly CriticReviewInput[] {

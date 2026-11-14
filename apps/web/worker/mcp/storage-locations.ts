@@ -10,7 +10,6 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
-import { mcpEntityId } from "./ids.ts";
 import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
 import type { listStorageLocationsInputSchema, storageLocationSummarySchema } from "./schemas.ts";
 import { andAll, containsAnyText, cursorPredicate, optionalEquals, sqliteLower } from "./sql.ts";
@@ -134,57 +133,6 @@ export async function listStorageLocations({
   };
 }
 
-export async function getStorageLocationSummary({
-  database,
-  storageLocationId,
-  userId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly storageLocationId: string;
-  readonly userId: string;
-}): Promise<z.infer<typeof storageLocationSummarySchema>> {
-  const rows = await database
-    .select({
-      id: storageLocations.id,
-      siteId: storageLocations.siteId,
-      siteName: sites.name,
-      parentId: storageLocations.parentId,
-      locationName: storageLocations.name,
-      locationType: storageLocations.locationType,
-      bottleCount: sql<number>`count(${bottles.id})`,
-    })
-    .from(storageLocations)
-    .innerJoin(sites, eq(storageLocations.siteId, sites.id))
-    .innerJoin(siteMemberships, eq(storageLocations.siteId, siteMemberships.siteId))
-    .leftJoin(
-      bottleLocations,
-      and(
-        eq(storageLocations.siteId, bottleLocations.siteId),
-        eq(storageLocations.id, bottleLocations.storageLocationId),
-      ),
-    )
-    .leftJoin(
-      bottles,
-      and(eq(bottleLocations.bottleId, bottles.id), eq(bottles.status, "in_stock")),
-    )
-    .where(and(eq(siteMemberships.userId, userId), eq(storageLocations.id, storageLocationId)))
-    .groupBy(
-      storageLocations.id,
-      storageLocations.siteId,
-      sites.name,
-      storageLocations.parentId,
-      storageLocations.name,
-      storageLocations.locationType,
-    )
-    .limit(1);
-  const row = rows[0];
-  if (row === undefined) {
-    throw new HTTPException(404, { message: "Storage location not found" });
-  }
-  const displayNames = await listStorageLocationDisplayNames({ database, userId });
-  return storageLocationSummaryFromRow({ displayNames, row });
-}
-
 export async function resolveStorageLocationId({
   database,
   locationId,
@@ -194,41 +142,16 @@ export async function resolveStorageLocationId({
   readonly locationId: string;
   readonly userId: string;
 }): Promise<string> {
-  const rows = await database
+  const [row] = await database
     .select({ id: storageLocations.id })
     .from(storageLocations)
     .innerJoin(siteMemberships, eq(storageLocations.siteId, siteMemberships.siteId))
-    .where(eq(siteMemberships.userId, userId));
-  const row = rows.find((candidate) => {
-    return mcpEntityId("location", candidate.id) === locationId;
-  });
+    .where(and(eq(siteMemberships.userId, userId), eq(storageLocations.id, locationId)))
+    .limit(1);
   if (row === undefined) {
     throw new HTTPException(404, { message: "Storage location not found" });
   }
   return row.id;
-}
-
-export async function resolveStorageLocationIdInSite({
-  database,
-  locationId,
-  siteId,
-  userId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly locationId: string;
-  readonly siteId: string;
-  readonly userId: string;
-}): Promise<string> {
-  const storageLocationId = await resolveStorageLocationId({ database, locationId, userId });
-  const rows = await database
-    .select({ id: storageLocations.id })
-    .from(storageLocations)
-    .where(and(eq(storageLocations.id, storageLocationId), eq(storageLocations.siteId, siteId)))
-    .limit(1);
-  if (rows[0] === undefined) {
-    throw new HTTPException(400, { message: "Storage location is not in the site" });
-  }
-  return storageLocationId;
 }
 
 function storageLocationSummaryFromRow({
@@ -248,11 +171,11 @@ function storageLocationSummaryFromRow({
 }): z.infer<typeof storageLocationSummarySchema> {
   return {
     bottleCount: row.bottleCount,
-    parentStorageLocationId: row.parentId === null ? null : mcpEntityId("location", row.parentId),
+    parentStorageLocationId: row.parentId,
     site: row.siteName,
     siteId: row.siteId,
     storageLocation: displayNames.get(row.id) ?? row.locationName,
-    storageLocationId: mcpEntityId("location", row.id),
+    storageLocationId: row.id,
     storageLocationType: row.locationType,
   };
 }

@@ -64,6 +64,99 @@ function setup(withRun = true) {
 }
 
 await describe("capture review corrections", async () => {
+  await it("requires a saved correction before manually importing unresolved measurements", async () => {
+    for (const reuseWine of [false, true]) {
+      const { sqlite, request } = setup();
+      try {
+        sqlite.exec(
+          "INSERT INTO wine_vintages (id,site_id,base_name,display_name,vintage_label) VALUES ('existing','site','Existing','Existing','Unknown')",
+        );
+        sqlite.prepare("UPDATE bottle_capture_runs SET import_candidate_json = ?").run(
+          JSON.stringify({
+            ...candidate,
+            bottle: {},
+            rawSuggestion: { bottleVolumeMl: "750 mL extra" },
+            validationIssues: [
+              {
+                path: "bottle.volumeMl",
+                rawValue: "750 mL extra",
+                message: "Enter an unambiguous metric volume.",
+              },
+            ],
+          }),
+        );
+        const choices = reuseWine ? { wineVintageId: "existing" } : {};
+        const rejected = await request("POST", "/import", choices);
+        assert.equal(rejected.status, 400, await rejected.clone().text());
+        assert.match(
+          z.object({ detail: z.string() }).parse(await rejected.json()).detail,
+          /bottle\.volumeMl.*Save corrected/iu,
+        );
+        assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+        assert.equal(
+          sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"],
+          "needs_review",
+        );
+        const notesOnly = await request("PATCH", "/review", {
+          expectedRevision: 0,
+          candidate: { ...candidate, bottle: { notes: "Check label" } },
+        });
+        assert.equal(notesOnly.status, 200, await notesOnly.clone().text());
+        assert.equal(
+          (await request("POST", "/import", { ...choices, expectedReviewRevision: 1 })).status,
+          400,
+        );
+        assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+        const correction = await request("PATCH", "/review", { expectedRevision: 1, candidate });
+        assert.equal(correction.status, 200, await correction.clone().text());
+        const imported = await request("POST", "/import", {
+          ...choices,
+          expectedReviewRevision: 2,
+        });
+        assert.equal(imported.status, 200, await imported.clone().text());
+        assert.equal(
+          sqlite.prepare("SELECT volume_ml FROM bottles LIMIT 1").get()?.["volume_ml"],
+          750,
+        );
+      } finally {
+        sqlite.close();
+      }
+    }
+  });
+
+  await it("allows existing-wine selection to discard only unresolved OCR wine facts", async () => {
+    const { sqlite, request } = setup();
+    try {
+      sqlite.exec(
+        "INSERT INTO wine_vintages (id,site_id,base_name,display_name,vintage_label,alcohol_percent) VALUES ('existing','site','Existing','Existing','Unknown',12)",
+      );
+      sqlite.prepare("UPDATE bottle_capture_runs SET import_candidate_json = ?").run(
+        JSON.stringify({
+          ...candidate,
+          rawSuggestion: { alcoholPercent: "about 14%" },
+          validationIssues: [
+            {
+              path: "wine.alcoholPercent",
+              rawValue: "about 14%",
+              message: "Enter an unambiguous alcohol percentage.",
+            },
+          ],
+        }),
+      );
+      assert.equal((await request("POST", "/import", {})).status, 400);
+      const response = await request("POST", "/import", { wineVintageId: "existing" });
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(
+        sqlite.prepare("SELECT alcohol_percent FROM wine_vintages WHERE id = 'existing'").get()?.[
+          "alcohol_percent"
+        ],
+        12,
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("imports unnamed varietal wine and replays its receipt without duplicate bottles", async () => {
     const { sqlite, request } = setup();
     const first = await request("POST", "/import", {});

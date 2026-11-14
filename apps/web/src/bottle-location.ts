@@ -1,6 +1,7 @@
 import {
   compareLocationPath,
-  locationPath,
+  locationLabel,
+  siteLabel,
   type LocationItem,
   type SiteItem,
 } from "./inventory-model.ts";
@@ -18,15 +19,15 @@ export function bottleLocationOptions(
 ): readonly { readonly label: string; readonly value: string }[] {
   return sites.flatMap((site) => [
     {
-      label: `${site.site} / No specific location`,
-      value: `site:${site.siteId}`,
+      label: `${siteLabel(site, sites)} / No specific location`,
+      value: `site:${site.id}`,
     },
     ...locations
-      .filter((location) => location.siteId === site.siteId)
+      .filter((location) => location.siteId === site.id)
       .toSorted(compareLocationPath(locations))
       .map((location) => ({
-        label: `${site.site} / ${locationPath(location, locations)}`,
-        value: `location:${location.locationId}`,
+        label: `${siteLabel(site, sites)} / ${locationLabel(location, locations)}`,
+        value: `location:${location.id}`,
       })),
   ]);
 }
@@ -37,11 +38,13 @@ export function bottleLocationValue(
   sites: readonly SiteItem[],
   locations: readonly LocationItem[],
 ): string {
-  const siteExists = sites.some((site) => site.siteId === selectedSiteId);
+  const siteExists = sites.some((site) => site.id === selectedSiteId);
   if (!siteExists) {
     return "";
   }
-  return locations.some((location) => location.locationId === selectedStorageLocationId)
+  return locations.some(
+    (location) => location.id === selectedStorageLocationId && location.siteId === selectedSiteId,
+  )
     ? `location:${selectedStorageLocationId}`
     : `site:${selectedSiteId}`;
 }
@@ -53,23 +56,23 @@ export function resolveBottleLocation(
 ): BottleLocationAssignment {
   if (value.startsWith("site:")) {
     const siteId = value.slice("site:".length);
-    const site = sites.find((candidate) => candidate.siteId === siteId);
+    const site = sites.find((candidate) => candidate.id === siteId);
     return {
       location: "",
-      site: site?.site ?? "",
-      siteId: site?.siteId ?? "",
+      site: site?.name ?? "",
+      siteId: site?.id ?? "",
       storageLocationId: "",
     };
   }
   if (value.startsWith("location:")) {
     const locationId = value.slice("location:".length);
-    const location = locations.find((candidate) => candidate.locationId === locationId);
-    const site = sites.find((candidate) => candidate.siteId === location?.siteId);
+    const location = locations.find((candidate) => candidate.id === locationId);
+    const site = sites.find((candidate) => candidate.id === location?.siteId);
     return {
-      location: location === undefined ? "" : locationPath(location, locations),
-      site: site?.site ?? "",
-      siteId: site?.siteId ?? "",
-      storageLocationId: location?.locationId ?? "",
+      location: location?.name ?? "",
+      site: site?.name ?? "",
+      siteId: site?.id ?? "",
+      storageLocationId: location?.id ?? "",
     };
   }
   return { location: "", site: "", siteId: "", storageLocationId: "" };
