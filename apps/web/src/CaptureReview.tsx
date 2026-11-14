@@ -11,6 +11,7 @@ import type {
   CaptureReviewSaveAction,
   CaptureReviewCandidate,
 } from "../shared/capture-import.ts";
+import { captureReviewCandidateSchema } from "../shared/capture-review.ts";
 import { hasWineIdentity } from "../shared/wine-identity.ts";
 import { WineRecordPicker } from "./WineRecordPicker.tsx";
 import type { AuthHeadersProvider } from "./useReadPage.ts";
@@ -57,6 +58,7 @@ type ReviewDraft = {
   readonly grapeVarieties: readonly string[];
   readonly wine: Readonly<Record<string, string>>;
   readonly bottle: Readonly<Record<string, string>>;
+  readonly unresolvedNumbers: readonly string[];
 };
 
 export function CaptureReview({
@@ -81,7 +83,8 @@ export function CaptureReview({
   readonly onSaveReview: CaptureReviewSaveAction;
 }): ReactElement {
   const initial = capture.reviewCandidate ?? capture.latestRun?.importCandidate;
-  const [draft, setDraft] = useState(() => reviewDraft(initial));
+  const original = capture.latestRun?.importCandidate;
+  const [draft, setDraft] = useState(() => reviewDraft(initial, original));
   const [savedDraft, setSavedDraft] = useState(draft);
   const [revision, setRevision] = useState(capture.reviewRevision);
   const [pending, setPending] = useState(false);
@@ -92,6 +95,12 @@ export function CaptureReview({
   const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
   const blocked = disabled || pending || !canWrite;
   const needsSavedCandidate = revision === 0 && isMissing(objectField(initial, "wine"));
+  const volumeRequired = validationIssues(original).some(
+    (issue) => issue.path === "bottle.volumeMl",
+  );
+  const problems = draftProblems(draft, volumeRequired);
+  const invalidBottle = problems.some((problem) => problem.path[0] === "bottle");
+  const invalidWine = problems.some((problem) => problem.path[0] === "wine");
   const identified = hasWineIdentity({
     ...draft.wine,
     grapeVarieties: draft.grapeVarieties,
@@ -106,7 +115,10 @@ export function CaptureReview({
     if (observedSourceVersion.current === sourceVersion) return;
     if (dirty || capture.reviewRevision < revision) return;
     observedSourceVersion.current = sourceVersion;
-    const refreshed = reviewDraft(capture.reviewCandidate ?? capture.latestRun?.importCandidate);
+    const refreshed = reviewDraft(
+      capture.reviewCandidate ?? capture.latestRun?.importCandidate,
+      original,
+    );
     setDraft(refreshed);
     setSavedDraft(refreshed);
     setRevision(capture.reviewRevision);
@@ -117,11 +129,24 @@ export function CaptureReview({
     dirty,
     revision,
     sourceVersion,
+    original,
   ]);
   const reasons = stringValues(objectField(capture.latestRun?.importResult, "reviewReasons"));
 
   function update(section: "wine" | "bottle", key: string, value: string): void {
-    const next = { ...draft, [section]: { ...draft[section], [key]: value } };
+    const changesVintageStatus = section === "wine" && key === "vintageStatus";
+    const next = {
+      ...draft,
+      [section]: {
+        ...draft[section],
+        [key]: value,
+        ...(changesVintageStatus && value !== "year" ? { vintageYear: "" } : {}),
+      },
+      unresolvedNumbers: draft.unresolvedNumbers.filter(
+        (path) =>
+          path !== `${section}.${key}` && !(changesVintageStatus && path === "wine.vintageYear"),
+      ),
+    };
     setDraft(next);
     onDirtyChange(JSON.stringify(next) !== JSON.stringify(savedDraft));
     setMessage(null);
@@ -129,9 +154,9 @@ export function CaptureReview({
 
   async function save(): Promise<void> {
     if (blocked || pendingRef.current) return;
-    const invalidNumber = invalidNumericField(draft);
-    if (invalidNumber !== null) {
-      setMessage({ error: true, text: `${fieldLabel(invalidNumber)} must be a finite number.` });
+    const problem = problems[0];
+    if (problem !== undefined) {
+      setMessage({ error: true, text: problem.message });
       return;
     }
     const candidate = draftCandidate(draft);
@@ -144,12 +169,15 @@ export function CaptureReview({
         setMessage({ error: true, text: result.message });
         return;
       }
-      const saved = reviewDraft(result.reviewCandidate);
+      const saved = reviewDraft(result.reviewCandidate, original);
       setDraft(saved);
       setSavedDraft(saved);
       setRevision(result.reviewRevision);
       onDirtyChange(false);
-      setMessage({ error: false, text: "Corrections saved. Choose an import action when ready." });
+      setMessage({
+        error: false,
+        text: "Corrections saved. Confirm adding the bottles when ready.",
+      });
     } catch {
       setMessage({
         error: true,
@@ -163,7 +191,15 @@ export function CaptureReview({
   }
 
   async function importWine(wineVintageId?: string, allowUnidentified = false): Promise<void> {
-    if (dirty || blocked || needsSavedCandidate || pendingRef.current) return;
+    if (
+      dirty ||
+      blocked ||
+      needsSavedCandidate ||
+      pendingRef.current ||
+      invalidBottle ||
+      (wineVintageId === undefined && invalidWine)
+    )
+      return;
     pendingRef.current = true;
     setPending(true);
     onBusyChange(true);
@@ -191,8 +227,14 @@ export function CaptureReview({
       <summary>Review wine and bottle details</summary>
       <div className="capture-review">
         <p>
-          Check against the photos. A separate wine name is optional. Save corrections before adding
-          bottles; selecting an existing wine leaves its shared details unchanged.
+          Extraction is a draft. Check the photos and details, then confirm adding{" "}
+          {capture.quantity} {capture.quantity === 1 ? "bottle" : "bottles"} to inventory. Saving
+          corrections does not add bottles.
+        </p>
+        <p>
+          A separate wine name is optional. Selecting an existing wine leaves its shared details
+          unchanged. Clear an uncertain wine number to record it as unknown, or choose Unknown for
+          an uncertain vintage.
         </p>
         {reasons.length === 0 ? null : (
           <ul aria-label="Reasons this capture needs review">
@@ -257,14 +299,14 @@ export function CaptureReview({
             />
           ))}
         </div>
-        {needsSavedCandidate ? (
-          <p>Save these details before adding this capture to inventory.</p>
-        ) : null}
-        {dirty ? (
-          <p role="status">
-            Unsaved corrections. Save them before importing or retrying extraction.
-          </p>
-        ) : null}
+        <ReviewDraftStatus
+          volumeMl={draft.bottle["volumeMl"]}
+          volumeRequired={volumeRequired}
+          invalidBottle={invalidBottle}
+          invalidWine={invalidWine}
+          needsSavedCandidate={needsSavedCandidate}
+          dirty={dirty}
+        />
         {capture.reviewRevision > revision ? (
           <div>
             <p>Newer saved corrections are available. Loading them replaces your unsaved edits.</p>
@@ -272,7 +314,7 @@ export function CaptureReview({
               label="Load latest corrections"
               isDisabled={blocked}
               onClick={() => {
-                const latest = reviewDraft(capture.reviewCandidate);
+                const latest = reviewDraft(capture.reviewCandidate, original);
                 setDraft(latest);
                 setSavedDraft(latest);
                 setRevision(capture.reviewRevision);
@@ -289,6 +331,8 @@ export function CaptureReview({
           pending={pending}
           needsSavedCandidate={needsSavedCandidate}
           identified={identified}
+          invalidBottle={invalidBottle}
+          invalidWine={invalidWine}
           candidates={wineVintageCandidates(capture.latestRun?.matchResult, revision)}
           wines={wines}
           getAuthHeaders={getAuthHeaders}
@@ -309,35 +353,56 @@ export function CaptureReview({
   );
 }
 
-function reviewDraft(candidate: unknown): ReviewDraft {
+function reviewDraft(candidate: unknown, original: unknown): ReviewDraft {
   const wine = objectField(candidate, "wine");
   const bottle = objectField(candidate, "bottle");
+  const unresolved = validationIssues(original).filter((issue) => {
+    const [section, key] = issue.path.split(".");
+    return (
+      (section === "wine" || section === "bottle") &&
+      key !== undefined &&
+      numericFields.has(key) &&
+      !hasField(section === "wine" ? wine : bottle, key)
+    );
+  });
+  function value(section: "wine" | "bottle", key: string): string {
+    return (
+      unresolved.find((issue) => issue.path === `${section}.${key}`)?.rawValue ??
+      displayField(objectField(section === "wine" ? wine : bottle, key))
+    );
+  }
   return {
     grapeVarieties: stringValues(objectField(wine, "grapeVarieties")),
+    unresolvedNumbers: unresolved.map((issue) => issue.path),
     wine: {
-      ...Object.fromEntries(wineFields.map(([key]) => [key, displayField(objectField(wine, key))])),
+      ...Object.fromEntries(wineFields.map(([key]) => [key, value("wine", key)])),
       vintageStatus:
+        (unresolved.some((issue) => issue.path === "wine.vintageYear") ? "year" : "") ||
         displayField(objectField(wine, "vintageStatus")) ||
         (typeof objectField(wine, "vintageYear") === "number" ? "year" : "unknown"),
     },
-    bottle: Object.fromEntries(
-      bottleFields.map(([key]) => [key, displayField(objectField(bottle, key))]),
-    ),
+    bottle: Object.fromEntries(bottleFields.map(([key]) => [key, value("bottle", key)])),
   };
 }
 function draftFields(
   values: Readonly<Record<string, string>>,
-): Record<string, string | number | string[]> {
+  nullableNumbers: boolean,
+): Record<string, string | number | null> {
   return Object.fromEntries(
-    Object.entries(values).flatMap<[string, string | number | string[]]>(([key, value]) => {
-      if (numericFields.has(key)) return value.trim() === "" ? [] : [[key, Number(value)]];
+    Object.entries(values).flatMap<[string, string | number | null]>(([key, value]) => {
+      if (numericFields.has(key))
+        return value.trim() === ""
+          ? nullableNumbers
+            ? [[key, null]]
+            : []
+          : [[key, Number(value)]];
       return [[key, value.trim()]];
     }),
   );
 }
 function draftCandidate(draft: ReviewDraft): CaptureReviewCandidate {
-  const wine = draftFields(draft.wine);
-  if (wine["vintageStatus"] !== "year") delete wine["vintageYear"];
+  const wine = draftFields(draft.wine, true);
+  if (wine["vintageStatus"] !== "year") wine["vintageYear"] = null;
   const status = draft.wine["vintageStatus"];
   return {
     wine: {
@@ -349,7 +414,7 @@ function draftCandidate(draft: ReviewDraft): CaptureReviewCandidate {
       designation: (draft.wine["designation"] ?? "").trim(),
       vintageStatus: status === "year" || status === "non_vintage" ? status : "unknown",
     },
-    bottle: draftFields(draft.bottle),
+    bottle: draftFields(draft.bottle, false),
   };
 }
 function facts(
@@ -378,6 +443,26 @@ function objectField(value: unknown, field: string): unknown {
     ? Object.getOwnPropertyDescriptor(value, field)?.value
     : undefined;
 }
+function hasField(value: unknown, field: string): boolean {
+  return typeof value === "object" && value !== null && Object.hasOwn(value, field);
+}
+function validationIssues(
+  candidate: unknown,
+): readonly { readonly path: string; readonly rawValue: string; readonly message: string }[] {
+  const issues = objectField(candidate, "validationIssues");
+  return Array.isArray(issues)
+    ? issues.flatMap((issue) => {
+        const path = objectField(issue, "path");
+        const rawValue = objectField(issue, "rawValue");
+        const message = objectField(issue, "message");
+        return typeof path === "string" &&
+          typeof rawValue === "string" &&
+          typeof message === "string"
+          ? [{ path, rawValue, message }]
+          : [];
+      })
+    : [];
+}
 function wineVintageCandidates(
   value: unknown,
   revision: number,
@@ -405,6 +490,8 @@ function CaptureReviewActions({
   pending,
   needsSavedCandidate,
   identified,
+  invalidBottle,
+  invalidWine,
   candidates,
   wines,
   getAuthHeaders,
@@ -419,6 +506,8 @@ function CaptureReviewActions({
   readonly pending: boolean;
   readonly needsSavedCandidate: boolean;
   readonly identified: boolean;
+  readonly invalidBottle: boolean;
+  readonly invalidWine: boolean;
   readonly candidates: readonly { readonly id: string; readonly label: string }[];
   readonly wines: readonly WineOption[];
   readonly getAuthHeaders?: AuthHeadersProvider | undefined;
@@ -442,30 +531,32 @@ function CaptureReviewActions({
         wines={wines}
         getAuthHeaders={getAuthHeaders}
         siteId={siteId}
-        disabled={blocked || dirty || needsSavedCandidate}
+        disabled={blocked || dirty || needsSavedCandidate || invalidBottle}
         onImport={onImport}
       />
       {candidates.map((candidate) => (
         <Button
           key={candidate.id}
-          label={`Use ${candidate.label}`}
-          isDisabled={blocked || dirty || needsSavedCandidate}
+          label={`Add bottles to ${candidate.label}`}
+          isDisabled={blocked || dirty || needsSavedCandidate || invalidBottle}
           onClick={() => {
             void onImport(candidate.id);
           }}
         />
       ))}
       <Button
-        label="Create new"
-        isDisabled={blocked || dirty || needsSavedCandidate || !identified}
+        label="Add bottles as new wine"
+        isDisabled={
+          blocked || dirty || needsSavedCandidate || !identified || invalidBottle || invalidWine
+        }
         onClick={() => {
           void onImport();
         }}
       />
       {identified ? null : (
         <Button
-          label="Save as unidentified wine"
-          isDisabled={blocked || dirty || needsSavedCandidate}
+          label="Add bottles as unidentified wine"
+          isDisabled={blocked || dirty || needsSavedCandidate || invalidBottle || invalidWine}
           onClick={() => {
             void onImport(undefined, true);
           }}
@@ -476,6 +567,52 @@ function CaptureReviewActions({
 }
 function isMissing(value: unknown): boolean {
   return value === null || value === undefined;
+}
+
+function ReviewDraftStatus({
+  volumeMl,
+  volumeRequired,
+  invalidBottle,
+  invalidWine,
+  needsSavedCandidate,
+  dirty,
+}: {
+  readonly volumeMl: string | undefined;
+  readonly volumeRequired: boolean;
+  readonly invalidBottle: boolean;
+  readonly invalidWine: boolean;
+  readonly needsSavedCandidate: boolean;
+  readonly dirty: boolean;
+}): ReactElement {
+  return (
+    <>
+      {volumeMl?.trim() === "" && !volumeRequired ? (
+        <p>
+          No bottle size is set. Adding bottles uses 750 mL by default unless you enter and save a
+          different size.
+        </p>
+      ) : null}
+      {invalidBottle ? (
+        <p>
+          Correct and save the bottle details before adding bottles, including to an existing wine.
+        </p>
+      ) : null}
+      {invalidWine ? (
+        <p>
+          Correct and save the uncertain wine values, or select an existing wine to keep its shared
+          details.
+        </p>
+      ) : null}
+      {needsSavedCandidate ? (
+        <p>Save these details before adding this capture to inventory.</p>
+      ) : null}
+      {dirty ? (
+        <p role="status">
+          Unsaved corrections. Save them before adding bottles or retrying extraction.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 function OriginalCaptureFacts({ candidate }: { readonly candidate: unknown }): ReactElement {
@@ -501,6 +638,15 @@ function OriginalCaptureFacts({ candidate }: { readonly candidate: unknown }): R
           </div>
         ))}
       </dl>
+      {validationIssues(candidate).length === 0 ? null : (
+        <ul aria-label="Original extraction issues">
+          {validationIssues(candidate).map((issue, index) => (
+            <li key={`${index}-${issue.path}`}>
+              {fieldLabel(issue.path.split("."))}: {issue.rawValue}. {issue.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </details>
   );
 }
@@ -549,7 +695,7 @@ function CaptureWineChoice({
         onChange={setSelected}
       />
       <Button
-        label="Use selected wine"
+        label="Add bottles to selected wine"
         isDisabled={disabled || selected === ""}
         onClick={() => {
           void onImport(selected);
@@ -562,9 +708,44 @@ function CaptureWineChoice({
 function invalidNumericField(draft: ReviewDraft): readonly string[] | null {
   for (const section of ["wine", "bottle"] as const) {
     for (const [key, value] of Object.entries(draft[section])) {
+      if (key === "vintageYear" && draft.wine["vintageStatus"] !== "year") continue;
       if (numericFields.has(key) && value.trim() !== "" && !Number.isFinite(Number(value)))
         return [section, key];
     }
   }
   return null;
+}
+
+function draftProblems(
+  draft: ReviewDraft,
+  volumeRequired: boolean,
+): readonly { readonly path: readonly PropertyKey[]; readonly message: string }[] {
+  const invalidNumber = invalidNumericField(draft);
+  const parsed = captureReviewCandidateSchema.safeParse(draftCandidate(draft));
+  return [
+    ...(invalidNumber === null
+      ? []
+      : [
+          { path: invalidNumber, message: `${fieldLabel(invalidNumber)} must be a finite number.` },
+        ]),
+    ...draft.unresolvedNumbers.map((path) => ({
+      path: path.split("."),
+      message: `Check and re-enter ${fieldLabel(path.split("."))} from the photos, or clear an uncertain wine value.`,
+    })),
+    ...(volumeRequired && draft.bottle["volumeMl"]?.trim() === ""
+      ? [
+          {
+            path: ["bottle", "volumeMl"],
+            message:
+              "Enter and save a valid bottle size; the original size issue cannot use the default.",
+          },
+        ]
+      : []),
+    ...(parsed.success
+      ? []
+      : parsed.error.issues.map((issue) => ({
+          path: issue.path,
+          message: `${fieldLabel(issue.path)}: ${issue.message}`,
+        }))),
+  ];
 }

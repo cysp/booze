@@ -11,6 +11,7 @@ import { asD1, migratedDatabase } from "./d1-support.ts";
 import { multipartBucket } from "./multipart-support.ts";
 import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
+import { siteRoutes } from "./routes/sites.ts";
 
 const candidate = {
   wine: { wineryName: "Producer", designation: "Reserve" },
@@ -19,6 +20,7 @@ const candidate = {
 const app = new Hono<{ Bindings: Bindings }>()
   .route("/", bottleCaptureRoutes)
   .route("/", bottleRoutes)
+  .route("/", siteRoutes)
   .onError(problemResponseForError);
 
 function setup() {
@@ -130,9 +132,11 @@ await describe("capture and site commit authorization", async () => {
       },
     ],
     ["/bottle-captures/capture/retry", "POST", undefined],
-    ["/bottle-captures/capture/import", "POST", {}],
     ["/bottle-captures/capture/review", "PATCH", { expectedRevision: 0, candidate }],
+    ["/bottle-captures/capture/import", "POST", {}],
     ["/bottle-captures/capture", "DELETE", undefined],
+    ["/sites/site", "PATCH", { name: "Changed" }],
+    ["/sites/site", "DELETE", undefined],
   ] as const) {
     await it(`rolls back ${method} ${path} if permission is revoked before commit`, async () => {
       const fixture = setup();
