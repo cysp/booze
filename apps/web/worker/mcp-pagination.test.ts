@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { listBottleSummaries } from "./mcp/bottles.ts";
-import { decodePageCursor, pageFromRows, type Page } from "./mcp/pagination.ts";
+import { decodePageCursor, pageFromRows, type Page } from "./read-pagination.ts";
 import { listSites } from "./mcp/sites.ts";
 import { listStorageLocations } from "./mcp/storage-locations.ts";
 import { listWineries } from "./mcp/wineries.ts";

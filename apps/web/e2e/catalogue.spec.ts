@@ -3,6 +3,11 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 import { createRequire } from "node:module";
 
 import { bottles, captures, locations, sites } from "./catalogue-fixtures.ts";
+import { captureSummarySchema } from "../shared/capture-read-resources.ts";
+import { bottleSummarySchema } from "../shared/inventory-queries.ts";
+import { calculateDrinkStatus } from "../shared/drink-status.ts";
+import { processingCaptureStatuses } from "../shared/capture-status.ts";
+import { wineOptionSchema } from "../shared/wine-options.ts";
 
 const axePath = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
@@ -21,6 +26,133 @@ type StaleRefreshScenario = {
   readonly mutationPath: string;
   readonly refreshFailurePath: string;
 };
+
+function catalogueReadResponse(url: URL, fixtures: CatalogueFixtures): unknown {
+  const bottleData = fixtures.bottleData ?? bottles;
+  const captureData = fixtures.captureData ?? captures;
+  const locationData = fixtures.locationData ?? locations;
+  const siteData = fixtures.siteData ?? sites;
+  const page = <Item>(data: readonly Item[]) => {
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 100);
+    const offset = Number(url.searchParams.get("pageToken")?.replace("page-", "") ?? 0);
+    return {
+      data: data.slice(offset, offset + limit),
+      totalCount: data.length,
+      nextPageToken: offset + limit < data.length ? `page-${offset + limit}` : null,
+    };
+  };
+  const captureCounts = {
+    processing: captureData.filter((capture) =>
+      processingCaptureStatuses.some((status) => capture.status === status),
+    ).length,
+    imported: captureData.filter((capture) => capture.status === "imported").length,
+    actionable: captureData.filter(
+      (capture) =>
+        capture.status !== "imported" &&
+        !processingCaptureStatuses.some((status) => capture.status === status),
+    ).length,
+  };
+  const matchesQuery = (text: string) =>
+    text.toLocaleLowerCase().includes((url.searchParams.get("query") ?? "").toLocaleLowerCase());
+  if (url.pathname === "/api/catalogue-summary")
+    return {
+      data: {
+        inStockBottleCount: bottleData.filter((bottle) => bottle.status === "in_stock").length,
+        drinkQueueBottleCount: bottleData.filter(
+          (bottle) =>
+            bottle.status === "in_stock" &&
+            ["drink-now", "drink-soon"].includes(calculateDrinkStatus(bottle)),
+        ).length,
+        captures: captureCounts,
+      },
+    };
+  if (url.pathname === "/api/bottles") {
+    const filtered = bottleData.filter(
+      (bottle) =>
+        bottle.status === "in_stock" &&
+        matchesQuery(
+          [
+            bottle.wineryName,
+            bottle.brandName,
+            bottle.displayName,
+            bottle.grapeVarieties.join(" "),
+            bottle.region,
+          ].join(" "),
+        ) &&
+        (!url.searchParams.has("siteId") || bottle.siteId === url.searchParams.get("siteId")) &&
+        (!url.searchParams.has("storageLocationId") ||
+          bottle.storageLocationId === url.searchParams.get("storageLocationId")) &&
+        (!url.searchParams.has("grapeVariety") ||
+          bottle.grapeVarieties.includes(url.searchParams.get("grapeVariety") ?? "")) &&
+        (!url.searchParams.has("drinkStatus") ||
+          calculateDrinkStatus(bottle) === url.searchParams.get("drinkStatus")),
+    );
+    return {
+      ...page(filtered.map((bottle) => bottleSummarySchema.parse(bottle))),
+      facets: {
+        grapeVarieties: [
+          ...new Set(filtered.flatMap((bottle) => bottle.grapeVarieties)),
+        ].toSorted(),
+        drinkStatuses: [...new Set(filtered.map((bottle) => calculateDrinkStatus(bottle)))],
+      },
+    };
+  }
+  if (url.pathname.startsWith("/api/bottles/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/bottles/".length));
+    const bottle = bottleData.find((item) => item.id === id);
+    return bottle === undefined ? undefined : { data: bottle };
+  }
+  if (url.pathname === "/api/wines") {
+    const wineData = [
+      ...new Map(bottleData.map((bottle) => [bottle.wineVintageId, bottle])).values(),
+    ].filter(
+      (wine) =>
+        wine.siteId === url.searchParams.get("siteId") &&
+        matchesQuery([wine.wineryName, wine.displayName, wine.grapeVarieties.join(" ")].join(" ")),
+    );
+    return page(wineData.map((wine) => wineOptionSchema.parse(wine)));
+  }
+  if (url.pathname.startsWith("/api/wines/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/wines/".length));
+    const wine = bottleData.find((item) => item.wineVintageId === id);
+    return wine === undefined
+      ? undefined
+      : { data: { ...wine, id, bottleCount: 1, inStockBottleCount: 1 } };
+  }
+  if (url.pathname === "/api/bottle-captures") {
+    const data = captureData
+      .filter((capture) => url.searchParams.get("view") === "all" || capture.status !== "imported")
+      .map((capture) =>
+        captureSummarySchema.parse({
+          ...capture,
+          imageCount: capture.images.length,
+          previewImage: capture.images[0] ?? null,
+        }),
+      );
+    return { ...page(data), counts: captureCounts };
+  }
+  if (url.pathname === "/api/bottle-capture-statuses") {
+    const ids = new Set(url.searchParams.getAll("captureId"));
+    return {
+      data: captureData
+        .filter((capture) => ids.has(capture.id))
+        .map(({ id, status, updatedAt, errorMessage }) => ({
+          id,
+          status,
+          updatedAt,
+          errorMessage,
+        })),
+    };
+  }
+  if (url.pathname.startsWith("/api/bottle-captures/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/bottle-captures/".length));
+    const capture = captureData.find((item) => item.id === id);
+    return capture === undefined ? undefined : { data: capture };
+  }
+  if (url.pathname === "/api/storage-locations") return { data: locationData };
+  if (url.pathname === "/api/sites") return { data: siteData };
+  return undefined;
+}
 
 async function fulfillSuccessfulRename(
   route: Route,
@@ -100,14 +232,15 @@ async function mockCatalogue(page: Page, fixtures: CatalogueFixtures = {}): Prom
       await route.fulfill({ body: "forced browser-test failure", status: 500 });
       return;
     }
-    const responseByPath = new Map<string, readonly unknown[]>([
-      ["/api/bottles", bottleData],
-      ["/api/wines", bottles],
-      ["/api/storage-locations", locationData],
-      ["/api/sites", siteData],
-      ["/api/bottle-captures", captureData],
-    ]);
-    const data = method === "GET" ? responseByPath.get(path) : undefined;
+    const data =
+      method === "GET"
+        ? catalogueReadResponse(new URL(request.url()), {
+            bottleData,
+            captureData,
+            locationData,
+            siteData,
+          })
+        : undefined;
     if (data === undefined) {
       await route.fulfill({
         body: `Unexpected browser-test request: ${method} ${path}`,
@@ -116,7 +249,7 @@ async function mockCatalogue(page: Page, fixtures: CatalogueFixtures = {}): Prom
       return;
     }
     await route.fulfill({
-      body: JSON.stringify({ data }),
+      body: JSON.stringify(data),
       contentType: "application/json",
       status: 200,
     });
@@ -192,14 +325,8 @@ async function mockCommittedMutationWithStaleRefresh(
       await route.fulfill({ body: "forced stale refresh", status: 503 });
       return;
     }
-    const responseByPath = new Map<string, readonly unknown[]>([
-      ["/api/bottles", bottleData],
-      ["/api/wines", bottles],
-      ["/api/storage-locations", locations],
-      ["/api/sites", sites],
-      ["/api/bottle-captures", captures],
-    ]);
-    const data = method === "GET" ? responseByPath.get(path) : undefined;
+    const data =
+      method === "GET" ? catalogueReadResponse(new URL(request.url()), { bottleData }) : undefined;
     if (data === undefined) {
       await route.fulfill({
         body: `Unexpected browser-test request: ${method} ${path}`,
@@ -208,7 +335,7 @@ async function mockCommittedMutationWithStaleRefresh(
       return;
     }
     await route.fulfill({
-      body: JSON.stringify({ data }),
+      body: JSON.stringify(data),
       contentType: "application/json",
       status: 200,
     });
@@ -225,6 +352,7 @@ async function failDestructiveAction(
   await trigger.focus();
   await trigger.press("Enter");
   const dialog = page.getByRole("alertdialog", { name: dialogName });
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   const action = dialog.getByRole("button", { name: actionName });
   await action.focus();
   await action.press("Enter");
@@ -250,13 +378,50 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Browse bottles" })).toBeVisible();
 });
 
+test("reads bounded page resources and opens capture/bottle detail only on demand", async ({
+  page,
+}) => {
+  const reads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname.startsWith("/api/")) reads.push(url.pathname);
+  });
+  await page.reload();
+  await expect(page.locator(".bottle-card")).toHaveCount(1);
+  expect(reads).not.toContain("/api/bottle-captures");
+  expect(reads).not.toContain("/api/wines");
+  expect(reads).not.toContain("/api/bottles/bottle-1");
+
+  const captureList = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/bottle-captures",
+  );
+  await page.getByRole("button", { name: "Capture" }).click();
+  const summaryResponse = await captureList;
+  const body = await summaryResponse.json();
+  expect(body.data).toHaveLength(1);
+  expect(body.data[0]).not.toHaveProperty("latestRun");
+  expect(body.data[0]).not.toHaveProperty("reviewCandidate");
+  expect(reads).not.toContain("/api/bottle-captures/capture-1");
+  expect(reads).not.toContain("/api/wines");
+  await page.getByRole("button", { name: "Review capture" }).click();
+  await expect(
+    page.locator("summary", { hasText: "Review wine and bottle details" }),
+  ).toBeVisible();
+  expect(reads.filter((path) => path === "/api/bottle-captures/capture-1")).toHaveLength(1);
+
+  await page.getByRole("button", { name: "Inventory", exact: true }).click();
+  await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("dialog", { name: "Edit bottle" })).toBeVisible();
+  expect(reads.filter((path) => path === "/api/bottles/bottle-1")).toHaveLength(1);
+});
+
 test("toggles capture evidence and full errors with the keyboard", async ({ page }) => {
   const errorMessage = "Extraction needs review\nThe models disagree on the vintage year.";
-  await page.route("**/api/bottle-captures", async (route) => {
+  await page.route("**/api/bottle-captures/capture-1", async (route) => {
     await route.fulfill({
       body: JSON.stringify({
-        data: captures.map((capture) => ({
-          ...capture,
+        data: {
+          ...captures[0],
           errorMessage,
           latestRun: {
             id: "run-review",
@@ -274,10 +439,10 @@ test("toggles capture evidence and full errors with the keyboard", async ({ page
             errorDetailR2Key: null,
             errorDetailContentType: null,
             errorDetailSizeBytes: null,
-            createdAt: capture.createdAt,
+            createdAt: captures[0]?.createdAt,
             completedAt: null,
           },
-        })),
+        },
       }),
       contentType: "application/json",
       status: 200,
@@ -285,6 +450,7 @@ test("toggles capture evidence and full errors with the keyboard", async ({ page
   });
   await page.reload();
   await page.getByRole("button", { name: "Capture" }).click();
+  await page.getByRole("button", { name: "Review capture" }).click();
 
   const review = page.locator("summary", { hasText: "Review wine and bottle details" });
   const reason = page.getByText("Check the year against the retained photos.");
@@ -568,7 +734,7 @@ test("clears submitted capture files without duplicating a committed capture", a
     mutationCount: 0,
     mutationMethod: "POST",
     mutationPath: "/api/bottle-captures",
-    refreshFailurePath: "/api/bottles",
+    refreshFailurePath: "/api/bottle-captures",
   };
   await mockCommittedMutationWithStaleRefresh(page, scenario);
   await page.reload();
@@ -594,7 +760,7 @@ test("clears submitted capture files without duplicating a committed capture", a
   await expect(page.getByText("0 of 4 selected.", { exact: false })).toBeVisible();
   await expect(
     page.getByRole("alert", {
-      name: "Inventory could not be refreshed. Try again.",
+      name: "Captures could not be refreshed. Try again.",
     }),
   ).toBeVisible();
   expect(scenario.mutationCount).toBe(1);
@@ -636,16 +802,20 @@ test("keeps a representative large catalogue scrollable and focusable", async ({
   await page.reload();
 
   const cards = page.locator(".bottle-card");
+  await expect(cards).toHaveCount(50);
+  await expect(page.getByText("Showing 50 of 160 matching bottles")).toBeVisible();
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
   await expect(cards).toHaveCount(100);
-  await expect(page.getByText("Showing 100 of 160 bottles")).toBeVisible();
-  await page.getByRole("button", { name: "Show 60 more" }).click();
-  await expect(cards).toHaveCount(160);
-  const inventoryStatus = page.locator(".inventory-pagination [role='status']");
-  await expect(inventoryStatus).toHaveText("Showing all 160 bottles");
-  const firstRevealedCard = cards.nth(100);
+  const firstRevealedCard = cards.nth(50);
   await expect(firstRevealedCard).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(firstRevealedCard.getByRole("button", { name: "Edit" })).toBeFocused();
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect(cards).toHaveCount(150);
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect(cards).toHaveCount(160);
+  const inventoryStatus = page.locator(".inventory-pagination [role='status']");
+  await expect(inventoryStatus).toHaveText("Showing 160 of 160 matching bottles");
   const lastEdit = cards.last().getByRole("button", { name: "Edit" });
   await lastEdit.scrollIntoViewIfNeeded();
   await expect(lastEdit).toBeVisible();
@@ -684,17 +854,20 @@ test("bounds capture, site, and location work before progressively revealing it"
 
   await page.getByRole("button", { name: "Capture" }).click();
   await expect(page.locator(".capture-card")).toHaveCount(50);
-  await page.getByRole("button", { name: "Show 30 more" }).click();
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
   await expect(page.locator(".capture-card")).toHaveCount(80);
   const captureStatus = page.locator(".inventory-pagination [role='status']");
-  await expect(captureStatus).toHaveText("Showing all 80 captures");
+  await expect(captureStatus).toHaveText("Showing 80 of 80 matching captures");
   const firstRevealedCapture = page.locator(".capture-card").nth(50);
   await expect(firstRevealedCapture).toBeFocused();
-  await expect(firstRevealedCapture.getByRole("button", { name: "Create new" })).toBeDisabled();
   await page.keyboard.press("Tab");
+  const reviewTrigger = firstRevealedCapture.getByRole("button", { name: "Review capture" });
+  await expect(reviewTrigger).toBeFocused();
+  await reviewTrigger.press("Enter");
+  await expect(firstRevealedCapture.getByRole("button", { name: "Create new" })).toBeDisabled();
   await expect(
     firstRevealedCapture.locator("summary", { hasText: "Review wine and bottle details" }),
-  ).toBeFocused();
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Storage" }).click();
   const sitesRegion = page.getByRole("region", { exact: true, name: "Sites" });

@@ -10,7 +10,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
-import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
+import { decodePageCursor, pageFromRows, pageLimit, type Page } from "../read-pagination.ts";
 import type { listStorageLocationsInputSchema, storageLocationSummarySchema } from "./schemas.ts";
 import { andAll, containsAnyText, cursorPredicate, optionalEquals, sqliteLower } from "./sql.ts";
 

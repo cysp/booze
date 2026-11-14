@@ -276,7 +276,7 @@ await describe("capture persistence", async () => {
     );
   });
 
-  await it("hydrates capture history in three queries and authorizes image reads directly", async () => {
+  await it("bounds capture summaries and hydrates selected detail with authorized image reads", async () => {
     const sqlite = seededDatabase();
     sqlite.exec(`INSERT INTO site_memberships (site_id, user_id, role) VALUES ('site', 'user', 'owner');
       INSERT INTO image_assets (id, site_id, sha256, r2_key, content_type, size_bytes, uploaded_by_user_id)
@@ -307,17 +307,19 @@ await describe("capture persistence", async () => {
     };
     const database = createD1Client(d1);
     const captures = await listBottleCaptures({ database, userId: "user" });
-    assert.equal(queries, 3);
-    assert.equal(captures.length, 100);
-    for (const capture of captures) {
-      assert.equal(capture.images.length, 1);
-      assert.equal(capture.latestRun?.id, `${capture.id}-2`);
+    assert.equal(queries, 2);
+    assert.equal(captures.data.length, 50);
+    assert.equal(captures.totalCount, 100);
+    for (const capture of captures.data) {
+      assert.equal(capture.imageCount, 1);
+      assert.equal(capture.previewImage?.imageAssetId, "image");
+      assert.equal("latestRun" in capture, false);
     }
     queries = 0;
-    assert.equal(
-      (await getBottleCapture({ captureId: "capture-20", database, userId: "user" })).id,
-      "capture-20",
-    );
+    const detail = await getBottleCapture({ captureId: "capture-20", database, userId: "user" });
+    assert.equal(detail.id, "capture-20");
+    assert.equal(detail.images.length, 1);
+    assert.equal(detail.latestRun?.id, "capture-20-2");
     assert.equal(queries, 3);
     queries = 0;
     assert.equal(

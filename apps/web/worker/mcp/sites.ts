@@ -8,7 +8,7 @@ import {
 import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
+import { decodePageCursor, pageFromRows, pageLimit, type Page } from "../read-pagination.ts";
 import type { listSitesInputSchema, siteSummarySchema } from "./schemas.ts";
 import { andAll, cursorPredicate, optionalContains, sqliteLower } from "./sql.ts";
 

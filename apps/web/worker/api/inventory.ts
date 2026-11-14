@@ -1,173 +1,170 @@
-import { storedVintageLabel, storedVintageStatus } from "./wine-vintage.ts";
+// oxlint-disable import/max-dependencies -- Inventory reads compose shared contracts, SQL projections, pagination, evidence and catalogue counts.
 import {
   bottleLocations,
   bottles,
-  grapeVarieties,
   siteMemberships,
-  sites,
   storageLocations,
-  wineConstituents,
-  wineries,
   wineVintages,
   type BoozeDatabase,
 } from "@chikachow/booze-db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or, sql, type SQL } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-
-import { listCriticReviews, type CriticReviewResource } from "./critic-reviews.ts";
-import { listWineAwards, type WineAwardResource } from "./wine-awards.ts";
-
-export type DrinkStatus = "drink-now" | "drink-soon" | "hold" | "past-window" | "unknown";
-
 import type { BottleResource } from "../../shared/catalogue-resources.ts";
+import {
+  calculateDrinkStatus,
+  drinkStatuses,
+  type DrinkStatus,
+} from "../../shared/drink-status.ts";
+import type { InventoryPage } from "../../shared/inventory-queries.ts";
+import type { CatalogueSummary } from "../../shared/catalogue-summary.ts";
+import type { InventoryQuery } from "./read-query-inputs.ts";
+import { getCaptureCounts } from "../capture-store.ts";
+import { pageFromRows, pageLimit, readPaginationCursor } from "../read-pagination.ts";
+import {
+  authorisedBottleQuery,
+  bottleColumns,
+  bottleSummaryColumns,
+  readGrapeVarieties,
+  readWineEvidence,
+} from "./catalogue-projections.ts";
+import { bottleTextSearch } from "./catalogue-search.ts";
+
 export type { BottleResource } from "../../shared/catalogue-resources.ts";
+export { calculateDrinkStatus } from "../../shared/drink-status.ts";
+export type { DrinkStatus } from "../../shared/drink-status.ts";
+export type BottleWithDrinkStatus = BottleResource & { readonly drinkStatus: DrinkStatus };
 
-export type BottleWithDrinkStatus = BottleResource & {
-  readonly drinkStatus: DrinkStatus;
-};
+const inventoryPageName = "http.inventory";
+const bottleCursorSchema = z.strictObject({ createdAt: z.string(), id: z.string() });
 
-async function criticReviewsByWineVintage({
-  database,
-  userId,
-}: {
-  readonly database: BoozeDatabase;
-  readonly userId: string;
-}): Promise<ReadonlyMap<string, readonly CriticReviewResource[]>> {
-  const reviews = await listCriticReviews({ database, userId });
-  const reviewsByWine = new Map<string, CriticReviewResource[]>();
-  for (const review of reviews) {
-    reviewsByWine.set(review.wineVintageId, [
-      ...(reviewsByWine.get(review.wineVintageId) ?? []),
-      review,
-    ]);
-  }
-  return reviewsByWine;
+export function drinkStatusExpression(now = new Date()): SQL<string> {
+  const currentYear = now.getUTCFullYear();
+  return sql<string>`case
+    when ${wineVintages.drinkFromYear} is null and ${wineVintages.drinkToYear} is null then 'unknown'
+    when ${wineVintages.drinkToYear} is not null and ${currentYear} > ${wineVintages.drinkToYear} then 'past-window'
+    when ${wineVintages.drinkFromYear} is not null and ${currentYear} < ${wineVintages.drinkFromYear} then 'hold'
+    when ${wineVintages.drinkToYear} is not null and ${wineVintages.drinkToYear} - ${currentYear} <= 2 then 'drink-soon'
+    else 'drink-now'
+  end`;
 }
 
-async function awardsByWineVintage({
-  database,
-  userId,
-}: {
-  readonly database: BoozeDatabase;
-  readonly userId: string;
-}): Promise<ReadonlyMap<string, readonly WineAwardResource[]>> {
-  const awards = await listWineAwards({ database, userId });
-  const awardsByWine = new Map<string, WineAwardResource[]>();
-  for (const award of awards) {
-    awardsByWine.set(award.wineVintageId, [
-      ...(awardsByWine.get(award.wineVintageId) ?? []),
-      award,
-    ]);
-  }
-  return awardsByWine;
+function inventoryWhere(input: InventoryQuery, now: Date): SQL | undefined {
+  const drinkStatus = drinkStatusExpression(now);
+  return and(
+    input.status === "any" ? undefined : eq(bottles.status, input.status),
+    input.siteId === undefined ? undefined : eq(bottles.siteId, input.siteId),
+    input.storageLocationId === undefined
+      ? undefined
+      : eq(bottleLocations.storageLocationId, input.storageLocationId),
+    input.grapeVariety === undefined
+      ? undefined
+      : sql`exists (
+      select 1 from wine_constituents constituent
+      join grape_varieties grape on grape.id = constituent.grape_variety_id
+      where constituent.site_id = ${bottles.siteId} and constituent.wine_vintage_id = ${bottles.wineVintageId}
+        and grape.name = ${input.grapeVariety}
+    )`,
+    input.drinkStatus === undefined ? undefined : eq(drinkStatus, input.drinkStatus),
+    input.drinkQueue
+      ? sql`${drinkStatus} in ('drink-now', 'drink-soon', 'past-window')`
+      : undefined,
+    bottleTextSearch(input.query),
+  );
 }
 
-export async function listBottles({
+export async function queryInventory({
   database,
-  status = "in_stock",
+  input,
   userId,
+  now = new Date(),
 }: {
   readonly database: BoozeDatabase;
-  readonly status?: "any" | "in_stock";
+  readonly input: InventoryQuery;
   readonly userId: string;
-}): Promise<readonly BottleResource[]> {
-  const grapeVarietiesByWine = database
-    .select({
-      wineVintageId: wineConstituents.wineVintageId,
-      grapeVarieties: sql<
-        string | null
-      >`json_group_array(${grapeVarieties.name} order by ${grapeVarieties.name})`.as(
-        "grape_varieties",
-      ),
-    })
-    .from(wineConstituents)
-    .innerJoin(grapeVarieties, eq(wineConstituents.grapeVarietyId, grapeVarieties.id))
-    .groupBy(wineConstituents.wineVintageId)
-    .as("grape_varieties_by_wine");
-
-  const rows = await database
-    .select({
-      id: bottles.id,
-      wineVintageId: bottles.wineVintageId,
-      siteId: bottles.siteId,
-      siteName: sites.name,
-      storageLocationId: bottleLocations.storageLocationId,
-      storageLocationName: storageLocations.name,
-      positionHint: bottleLocations.positionHint,
-      status: bottles.status,
-      bottleNumber: bottles.bottleNumber,
-      volumeMl: bottles.volumeMl,
-      barcode: bottles.barcode,
-      lotCode: bottles.lotCode,
-      bottleNotes: bottles.notes,
-      wineryId: wineries.id,
-      wineryName: wineries.name,
-      brandName: wineVintages.brandName,
-      baseName: wineVintages.baseName,
-      designation: wineVintages.designation,
-      displayName: wineVintages.displayName,
-      vintageYear: wineVintages.vintageYear,
-      vintageLabel: storedVintageLabel,
-      vintageStatus: storedVintageStatus,
-      wineBottleCount: sql<number>`(select count(*) from bottles as related_bottles where related_bottles.site_id = ${bottles.siteId} and related_bottles.wine_vintage_id = ${bottles.wineVintageId})`,
-      grapeVarieties: grapeVarietiesByWine.grapeVarieties,
-      country: wineVintages.country,
-      region: wineVintages.region,
-      appellation: wineVintages.appellation,
-      classification: wineVintages.classification,
-      wineType: wineVintages.wineType,
-      wineColor: wineVintages.wineColor,
-      addressQualification: wineVintages.addressQualification,
-      alcoholPercent: wineVintages.alcoholPercent,
-      drinkFromYear: wineVintages.drinkFromYear,
-      drinkToYear: wineVintages.drinkToYear,
-      description: wineVintages.description,
-      drinkingAdvice: wineVintages.drinkingAdvice,
-      labelText: wineVintages.labelText,
-      sourceUrl: wineVintages.sourceUrl,
-      wineNotes: wineVintages.notes,
-      createdAt: bottles.createdAt,
-    })
-    .from(bottles)
-    .innerJoin(sites, eq(bottles.siteId, sites.id))
-    .innerJoin(siteMemberships, eq(bottles.siteId, siteMemberships.siteId))
+  readonly now?: Date;
+}): Promise<InventoryPage> {
+  const scopedInput = { ...input, userId, currentYear: now.getUTCFullYear() };
+  const cursor = readPaginationCursor({
+    cursorSchema: bottleCursorSchema,
+    input: scopedInput,
+    toolName: inventoryPageName,
+  });
+  const where = inventoryWhere(input, now);
+  const filtered = database.$with("filtered_inventory").as(
+    authorisedBottleQuery({
+      database,
+      columns: {
+        id: bottles.id,
+        wineVintageId: bottles.wineVintageId,
+        siteId: bottles.siteId,
+        drinkStatus: drinkStatusExpression(now).as("drink_status"),
+      },
+      userId,
+      where,
+    }),
+  );
+  const countQuery = database
+    .with(filtered)
+    .select({ totalCount: sql<number>`count(*)`.as("total_count") })
+    .from(filtered);
+  const pageQuery = authorisedBottleQuery({
+    database,
+    columns: bottleSummaryColumns,
+    userId,
+    where: and(
+      where,
+      cursor === null
+        ? undefined
+        : or(
+            lt(bottles.createdAt, cursor.createdAt),
+            and(eq(bottles.createdAt, cursor.createdAt), gt(bottles.id, cursor.id)),
+          ),
+    ),
+  })
+    .orderBy(desc(bottles.createdAt), asc(bottles.id))
+    .limit(pageLimit(input));
+  const grapeQuery = database
+    .with(filtered)
+    .select({ name: sql<string>`grape.name`.as("grape_name") })
+    .from(filtered)
     .innerJoin(
-      wineVintages,
-      and(eq(bottles.siteId, wineVintages.siteId), eq(bottles.wineVintageId, wineVintages.id)),
+      sql`wine_constituents constituent`,
+      sql`constituent.site_id = ${filtered.resource.siteId} and constituent.wine_vintage_id = ${filtered.resource.wineVintageId}`,
     )
-    .leftJoin(
-      wineries,
-      and(eq(wineVintages.siteId, wineries.siteId), eq(wineVintages.wineryId, wineries.id)),
-    )
-    .leftJoin(bottleLocations, eq(bottles.id, bottleLocations.bottleId))
-    .leftJoin(
-      storageLocations,
-      and(
-        eq(bottleLocations.siteId, storageLocations.siteId),
-        eq(bottleLocations.storageLocationId, storageLocations.id),
-      ),
-    )
-    .leftJoin(grapeVarietiesByWine, eq(wineVintages.id, grapeVarietiesByWine.wineVintageId))
-    .where(
-      status === "in_stock"
-        ? and(eq(siteMemberships.userId, userId), eq(bottles.status, "in_stock"))
-        : eq(siteMemberships.userId, userId),
-    )
-    .orderBy(desc(bottles.createdAt));
-  const [criticReviewsByWine, awardsByWine] = await Promise.all([
-    criticReviewsByWineVintage({ database, userId }),
-    awardsByWineVintage({ database, userId }),
+    .innerJoin(sql`grape_varieties grape`, sql`grape.id = constituent.grape_variety_id`)
+    .groupBy(sql`grape.name`)
+    .orderBy(sql`grape.name`);
+  const drinkQuery = database
+    .with(filtered)
+    .select({ drinkStatus: filtered.resource.drinkStatus })
+    .from(filtered)
+    .groupBy(filtered.resource.drinkStatus);
+  const [counts, rows, grapes, statusRows] = await database.batch([
+    countQuery,
+    pageQuery,
+    grapeQuery,
+    drinkQuery,
   ]);
-
-  return rows.map((row) => ({
-    ...row,
-    wineryName: row.wineryName ?? "",
-    criticReviews: criticReviewsByWine.get(row.wineVintageId) ?? [],
-    awards: awardsByWine.get(row.wineVintageId) ?? [],
-    grapeVarieties:
-      row.grapeVarieties === null ? [] : z.array(z.string()).parse(JSON.parse(row.grapeVarieties)),
-  }));
+  const page = pageFromRows({
+    input: scopedInput,
+    items: rows.map((row) => row.resource),
+    cursorForItem: (row) => ({ createdAt: row.createdAt, id: row.id }),
+    toolName: inventoryPageName,
+  });
+  const presentStatuses = new Set(statusRows.map((row) => row.drinkStatus));
+  return {
+    data: page.items.map((row) => ({
+      ...row,
+      grapeVarieties: readGrapeVarieties(row.grapeVarieties),
+    })),
+    totalCount: counts[0]?.totalCount ?? 0,
+    nextPageToken: page.metadata.nextPageToken,
+    facets: {
+      grapeVarieties: grapes.map((row) => row.name),
+      drinkStatuses: drinkStatuses.filter((status) => presentStatuses.has(status)),
+    },
+  };
 }
 
 export async function getBottle({
@@ -179,54 +176,54 @@ export async function getBottle({
   readonly database: BoozeDatabase;
   readonly userId: string;
 }): Promise<BottleResource> {
-  const bottle = (await listBottles({ database, status: "any", userId })).find(
-    (row) => row.id === bottleId,
-  );
-
-  if (bottle === undefined) {
-    throw new HTTPException(404, { message: "Bottle not found" });
-  }
-  return bottle;
+  const [result] = await authorisedBottleQuery({
+    database,
+    columns: bottleColumns,
+    userId,
+    where: eq(bottles.id, bottleId),
+  }).limit(1);
+  const row = result?.resource;
+  if (row === undefined) throw new HTTPException(404, { message: "Bottle not found" });
+  return {
+    ...row,
+    grapeVarieties: readGrapeVarieties(row.grapeVarieties),
+    ...(await readWineEvidence({ database, userId, wineVintageId: row.wineVintageId })),
+  };
 }
 
-export function calculateDrinkStatus({
-  drinkFromYear,
-  drinkToYear,
+export async function getCatalogueSummary({
+  database,
+  userId,
   now = new Date(),
 }: {
-  readonly drinkFromYear: number | null;
-  readonly drinkToYear: number | null;
+  readonly database: BoozeDatabase;
+  readonly userId: string;
   readonly now?: Date;
-}): DrinkStatus {
-  if (drinkFromYear === null && drinkToYear === null) {
-    return "unknown";
-  }
-
-  const currentYear = now.getUTCFullYear();
-  if (drinkToYear !== null && currentYear > drinkToYear) {
-    return "past-window";
-  }
-  if (drinkFromYear !== null && currentYear < drinkFromYear) {
-    return "hold";
-  }
-  if (drinkToYear !== null && drinkToYear - currentYear <= 2) {
-    return "drink-soon";
-  }
-  return "drink-now";
+}): Promise<CatalogueSummary> {
+  const [counts, captures] = await Promise.all([
+    authorisedBottleQuery({
+      database,
+      userId,
+      where: eq(bottles.status, "in_stock"),
+      columns: {
+        inStockBottleCount: sql<number>`count(*)`,
+        drinkQueueBottleCount: sql<number>`coalesce(sum(case when ${drinkStatusExpression(now)} in ('drink-now', 'drink-soon', 'past-window') then 1 else 0 end), 0)`,
+      },
+    }),
+    getCaptureCounts({ database, userId }),
+  ]);
+  return {
+    inStockBottleCount: counts[0]?.resource.inStockBottleCount ?? 0,
+    drinkQueueBottleCount: counts[0]?.resource.drinkQueueBottleCount ?? 0,
+    captures,
+  };
 }
 
 export function withDrinkStatus(
   bottle: BottleResource,
   now: Date = new Date(),
 ): BottleWithDrinkStatus {
-  return {
-    ...bottle,
-    drinkStatus: calculateDrinkStatus({
-      drinkFromYear: bottle.drinkFromYear,
-      drinkToYear: bottle.drinkToYear,
-      now,
-    }),
-  };
+  return { ...bottle, drinkStatus: calculateDrinkStatus({ ...bottle, now }) };
 }
 
 export async function assertCanReadStorageLocation({
@@ -244,8 +241,6 @@ export async function assertCanReadStorageLocation({
     .innerJoin(siteMemberships, eq(storageLocations.siteId, siteMemberships.siteId))
     .where(and(eq(storageLocations.id, storageLocationId), eq(siteMemberships.userId, userId)))
     .limit(1);
-
-  if (rows[0] === undefined) {
+  if (rows[0] === undefined)
     throw new HTTPException(404, { message: "Storage location not found" });
-  }
 }
