@@ -1,35 +1,27 @@
+import { createBottleCapture } from "../capture-intake.ts";
 // oxlint-disable import/max-dependencies -- Capture route composes storage, workflow, OCR, import, and authorization boundaries.
-import { createD1Client, storageLocations } from "@chikachow/booze-db";
-import { and, eq } from "drizzle-orm";
+import { createD1Client } from "@chikachow/booze-db";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { captureReviewCandidateSchema, isIdentifiedCapture } from "../../shared/capture-review.ts";
+import { additionOperationIdSchema } from "../../shared/addition-operation.ts";
 import { validateBottleQuantity } from "../../shared/quantity.ts";
 import { z } from "zod";
 
-import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../api/auth.ts";
-import { upsertStorageLocation } from "../api/catalogue.ts";
-import { CatalogueConflictError } from "../api/catalogue-transaction.ts";
+import { requireAuthenticatedUser, requireSitePermission } from "../api/auth.ts";
 import { created, noContent } from "../api/http.ts";
 import { optionalText } from "../api/ids.ts";
 import type { Bindings } from "../api/types.ts";
-import { putCaptureRunArtifact, type CaptureRunArtifact } from "../capture-artifacts.ts";
-import {
-  CaptureImportConflictError,
-  getCommittedCaptureImport,
-  importReviewedCapture,
-} from "../bottle-importer.ts";
+import { getCommittedCaptureImport, importReviewedCapture } from "../bottle-importer.ts";
 import type { ImportCandidate } from "../bottle-extractor.ts";
 import { canImportCapture, canRetryCapture } from "../capture-state.ts";
 import {
-  createBottleCapture,
   ensureManualCaptureRun,
   saveCaptureReview,
   getBottleCapture,
   getCaptureImageObject,
   listBottleCaptures,
   reserveCaptureRetry,
-  updateCaptureRun,
   updateCaptureStatus,
 } from "../capture-store.ts";
 import { deleteBottleCaptureData, tryDrainR2ObjectDeletionQueue } from "../deletion.ts";
@@ -68,32 +60,43 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       secretKey: context.env.CLERK_SECRET_KEY,
     });
     const formData = await readCaptureFormData(context.req.raw);
-    const siteId = await siteIdFromForm({ database, formData, userId: authenticatedUser.userId });
+    const siteId = z.string().trim().min(1).parse(stringField(formData, "siteId"));
+    const operationId = additionOperationIdSchema.parse(stringField(formData, "operationId"));
     await requireSitePermission({
       database,
       permission: "site.content.write",
       siteId,
       userId: authenticatedUser.userId,
     });
-    const storageLocationId = await storageLocationIdFromForm({ database, formData, siteId });
+    const storageLocationId = optionalText(stringField(formData, "storageLocationId"));
     const files = formData.getAll("images").filter((entry) => entry instanceof File);
 
     const capture = await createBottleCapture({
+      operationId,
       bucket: context.env.IMAGE_BUCKET,
       database,
       files,
-      images: context.env.IMAGES,
       positionHint: optionalText(stringField(formData, "positionHint")),
       quantity: parseCaptureQuantity(stringField(formData, "quantity")),
       siteId,
       storageLocationId,
       userId: authenticatedUser.userId,
     });
+    if (capture.status === "replayed") {
+      return created(
+        await captureSubmissionResult({
+          captureId: capture.captureId,
+          database,
+          userId: authenticatedUser.userId,
+        }),
+      );
+    }
     if (capture.status === "upload_failed") {
       return created({
         captureId: capture.captureId,
         errorMessage: capture.errorMessage,
         workflowInstanceId: null,
+        intakeComplete: false,
       });
     }
     try {
@@ -101,7 +104,11 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
         id: capture.captureId,
         params: { captureId: capture.captureId },
       });
-      return created({ captureId: capture.captureId, workflowInstanceId: instance.id });
+      return created({
+        captureId: capture.captureId,
+        workflowInstanceId: instance.id,
+        intakeComplete: true,
+      });
     } catch (error) {
       const details = errorDetails(error);
       const errorMessage =
@@ -122,7 +129,12 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
         errorMessage,
         errorDetail: details,
       });
-      return created({ captureId: capture.captureId, errorMessage, workflowInstanceId: null });
+      return created({
+        captureId: capture.captureId,
+        errorMessage,
+        workflowInstanceId: null,
+        intakeComplete: true,
+      });
     }
   })
   .get("/bottle-captures/:captureId", async (context) => {
@@ -160,7 +172,25 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     if (object === null) {
       throw new HTTPException(404, { message: "Capture image object not found" });
     }
-    return new Response(object.body, { headers: { "content-type": image.contentType } });
+    const response = new Response(object.body, { headers: { "content-type": image.contentType } });
+    if (image.needsThumbnail && context.env.IMAGES !== undefined && response.body !== null) {
+      const bytes = response.body.pipeThrough(
+        new TransformStream<unknown, Uint8Array>({
+          transform(chunk, controller) {
+            if (!(chunk instanceof Uint8Array))
+              throw new TypeError("Image object body must contain bytes");
+            controller.enqueue(chunk);
+          },
+        }),
+      );
+      const thumbnail = await context.env.IMAGES.input(bytes)
+        .transform({ fit: "cover", height: 240, width: 240 })
+        .output({ format: "image/webp", quality: 75 });
+      return new Response(thumbnail.image(), {
+        headers: { "content-type": thumbnail.contentType() },
+      });
+    }
+    return response;
   })
   .post("/bottle-captures/:captureId/retry", async (context) => {
     const database = createD1Client(context.env.DB);
@@ -307,68 +337,18 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
         database,
         expectedReviewRevision: payload.expectedReviewRevision,
       }));
-    try {
-      const imported = await importReviewedCapture({
-        candidate: candidate satisfies ImportCandidate,
-        captureId: capture.id,
-        database,
-        runId,
-        workflowInstanceId: capture.workflowInstanceId,
-        quantity: capture.quantity,
-        siteId: capture.siteId,
-        storageLocationId: capture.storageLocationId,
-        positionHint: capture.positionHint,
-        wineVintageId: payload.wineVintageId,
-        expectedReviewRevision: payload.expectedReviewRevision,
-      });
-      return context.json({ data: imported });
-    } catch (error) {
-      if (error instanceof CaptureImportConflictError) throw error;
-      if (
-        error instanceof CatalogueConflictError ||
-        (error instanceof HTTPException && error.status === 400)
-      ) {
-        // Validation or proven transaction rollback left the catalogue unchanged;
-        // retain the reviewed extraction instead of requiring another OCR run.
-        await updateCaptureStatus({
-          captureId: capture.id,
-          database,
-          status: "needs_review",
-          errorMessage: error.message,
-          workflowInstanceId: capture.workflowInstanceId,
-          runId,
-          expectedStatus: "importing",
-        });
-        throw error;
-      }
-      const message = shortErrorMessage(error);
-      const details = errorDetails(error);
-      const errorDetailArtifact = await tryPutErrorArtifact({
-        bucket: context.env.IMAGE_BUCKET,
-        captureId: capture.id,
-        details,
-        runId,
-        siteId: capture.siteId,
-      });
-      await updateCaptureRun({
-        database,
-        runId,
-        status: "failed",
-        errorMessage: message,
-        ...(errorDetailArtifact === null ? {} : { errorDetailArtifact }),
-      });
-      await updateCaptureStatus({
-        captureId: capture.id,
-        database,
-        status: "failed",
-        errorMessage: message,
-        errorDetail: null,
-        workflowInstanceId: capture.workflowInstanceId,
-        runId,
-        expectedStatus: "importing",
-      });
-      throw error;
-    }
+    const imported = await importReviewedCapture({
+      candidate,
+      captureId: capture.id,
+      database,
+      runId,
+      workflowInstanceId: capture.workflowInstanceId,
+      quantity: capture.quantity,
+      siteId: capture.siteId,
+      wineVintageId: payload.wineVintageId,
+      expectedReviewRevision: payload.expectedReviewRevision,
+    });
+    return context.json({ data: imported });
   })
   .delete("/bottle-captures/:captureId", async (context) => {
     const database = createD1Client(context.env.DB);
@@ -411,112 +391,6 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     return noContent();
   });
 
-function shortErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const firstLine = message.split("\n", 1)[0]?.trim() ?? "";
-  const preview = firstLine === "" ? "Capture import failed" : firstLine;
-  return preview.length <= 300 ? preview : `${preview.slice(0, 297)}...`;
-}
-
-async function tryPutErrorArtifact({
-  bucket,
-  captureId,
-  details,
-  runId,
-  siteId,
-}: {
-  readonly bucket: R2Bucket;
-  readonly captureId: string;
-  readonly details: unknown;
-  readonly runId: string;
-  readonly siteId: string;
-}): Promise<CaptureRunArtifact | null> {
-  try {
-    return await putCaptureRunArtifact({
-      bucket,
-      captureId,
-      kind: "error",
-      runId,
-      siteId,
-      value: { captureId, errorDetail: details, runId },
-    });
-  } catch (artifactError) {
-    logError("capture_import_error_artifact_write_failed", {
-      captureId,
-      error: errorDetails(artifactError),
-      runId,
-      siteId,
-    });
-    return null;
-  }
-}
-
-async function siteIdFromForm({
-  database,
-  formData,
-  userId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly formData: FormData;
-  readonly userId: string;
-}): Promise<string> {
-  const explicitSiteId = optionalText(stringField(formData, "siteId"));
-  if (explicitSiteId !== null) {
-    return explicitSiteId;
-  }
-  return (
-    await upsertSite({
-      database,
-      site: stringField(formData, "siteName") ?? "home",
-      userId,
-    })
-  ).siteId;
-}
-
-async function storageLocationIdFromForm({
-  database,
-  formData,
-  siteId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly formData: FormData;
-  readonly siteId: string;
-}): Promise<string | null> {
-  const explicitStorageLocationId = optionalText(stringField(formData, "storageLocationId"));
-  if (explicitStorageLocationId !== null) {
-    await assertStorageLocationInSite({
-      database,
-      siteId,
-      storageLocationId: explicitStorageLocationId,
-    });
-    return explicitStorageLocationId;
-  }
-  const name = optionalText(stringField(formData, "storageLocationName"));
-  if (name === null) {
-    return null;
-  }
-  return (await upsertStorageLocation({ database, siteId, name })).storageLocationId;
-}
-
-async function assertStorageLocationInSite({
-  database,
-  siteId,
-  storageLocationId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly siteId: string;
-  readonly storageLocationId: string;
-}): Promise<void> {
-  const rows = await database
-    .select({ id: storageLocations.id })
-    .from(storageLocations)
-    .where(and(eq(storageLocations.siteId, siteId), eq(storageLocations.id, storageLocationId)))
-    .limit(1);
-  if (rows[0] === undefined) {
-    throw new HTTPException(400, { message: "Storage location does not belong to site" });
-  }
-}
-
 function stringField(formData: FormData, name: string): string | undefined {
   const value = formData.get(name);
   return typeof value === "string" ? value : undefined;
@@ -557,4 +431,36 @@ export async function readCaptureFormData(request: Request): Promise<FormData> {
     if (error instanceof HTTPException) throw error;
     throw new HTTPException(400, { message: "Invalid capture upload form" });
   }
+}
+
+async function captureSubmissionResult({
+  captureId,
+  database,
+  userId,
+}: {
+  readonly captureId: string;
+  readonly database: ReturnType<typeof createD1Client>;
+  readonly userId: string;
+}) {
+  const capture = await getBottleCapture({ captureId, database, userId });
+  const intakeComplete = capture.status !== "uploading" && capture.status !== "upload_failed";
+  if (!intakeComplete) {
+    return {
+      captureId,
+      workflowInstanceId: null,
+      intakeComplete,
+      errorMessage:
+        capture.errorMessage ??
+        "Capture images are not all saved yet. Submit the same photos again to resume, or delete this capture.",
+    };
+  }
+  if (capture.errorMessage !== null) {
+    return {
+      captureId,
+      workflowInstanceId: null,
+      intakeComplete,
+      errorMessage: capture.errorMessage,
+    };
+  }
+  return { captureId, workflowInstanceId: capture.workflowInstanceId, intakeComplete };
 }

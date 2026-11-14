@@ -1,4 +1,5 @@
 export const captureStatuses = [
+  "uploading",
   "queued",
   "extracting",
   "importing",

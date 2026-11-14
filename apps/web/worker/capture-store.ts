@@ -4,7 +4,6 @@ import {
   bottleCaptures,
   createD1Client,
   imageAssets,
-  r2ObjectDeletionQueue,
   siteMemberships,
   sites,
   storageLocations,
@@ -18,26 +17,6 @@ import {
   type CaptureReviewCandidate,
 } from "../shared/capture-review.ts";
 import { isCaptureStatus, type CaptureStatus } from "./capture-state.ts";
-import { errorDetails, logError } from "./observability.ts";
-
-const supportedImageTypes = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/heic",
-  "image/heif",
-]);
-const maxImageSizeBytes = 8 * 1024 * 1024;
-const maxCaptureImages = 4;
-const thumbnailContentType = "image/webp";
-const thumbnailExtension = ".webp";
-const thumbnailSizePixels = 240;
-const thumbnailQuality = 75;
-
-export type CaptureImageInput = {
-  readonly file: File;
-  readonly sortOrder: number;
-};
 
 export type CaptureImageResource = {
   readonly imageAssetId: string;
@@ -99,170 +78,6 @@ export type CaptureWorkflowRecord = {
     readonly sortOrder: number;
   }[];
 };
-
-export type CreateBottleCaptureResult =
-  | {
-      readonly captureId: string;
-      readonly status: "queued";
-    }
-  | {
-      readonly captureId: string;
-      readonly errorMessage: string;
-      readonly status: "upload_failed";
-    };
-
-export function validateCaptureFiles(files: readonly File[]): void {
-  if (files.length === 0) {
-    throw new HTTPException(400, { message: "At least one image is required" });
-  }
-  if (files.length > maxCaptureImages) {
-    throw new HTTPException(400, { message: `Choose up to ${maxCaptureImages} images` });
-  }
-  for (const file of files) {
-    if (!supportedImageTypes.has(file.type)) {
-      throw new HTTPException(415, {
-        message: "Only JPEG, PNG, WebP, HEIC, or HEIF images are supported",
-      });
-    }
-    if (file.size > maxImageSizeBytes) {
-      throw new HTTPException(413, { message: "Images must be smaller than 8MB" });
-    }
-  }
-}
-
-export async function createBottleCapture({
-  bucket,
-  database,
-  files,
-  images,
-  positionHint,
-  quantity,
-  siteId,
-  storageLocationId,
-  userId,
-}: {
-  readonly bucket: R2Bucket;
-  readonly database: BoozeDatabase;
-  readonly files: readonly File[];
-  readonly images: ImagesBinding | undefined;
-  readonly positionHint: string | null;
-  readonly quantity: number;
-  readonly siteId: string;
-  readonly storageLocationId: string | null;
-  readonly userId: string;
-}): Promise<CreateBottleCaptureResult> {
-  validateCaptureFiles(files);
-
-  const captureId = crypto.randomUUID();
-  try {
-    await database.insert(bottleCaptures).values({
-      id: captureId,
-      workflowInstanceId: captureId,
-      siteId,
-      userId,
-      storageLocationId,
-      positionHint,
-      quantity,
-      status: "upload_failed",
-      errorMessage: "Capture image upload did not complete. Submit the capture again.",
-      errorDetailJson: JSON.stringify(
-        captureUploadFailureDetail({
-          files,
-          imageAssetCount: 0,
-          stage: "intake_started",
-        }),
-      ),
-    });
-  } catch (error) {
-    logError("bottle_capture_insert_failed", {
-      captureId,
-      error: errorDetails(error),
-      fileCount: files.length,
-      siteId,
-      storageLocationId,
-    });
-    throw error;
-  }
-
-  const imageAssetIds: string[] = [];
-  try {
-    for (const [index, file] of files.entries()) {
-      await updateCaptureStatus({
-        captureId,
-        database,
-        status: "upload_failed",
-        errorMessage: "Capture image upload did not complete. Submit the capture again.",
-        errorDetail: captureUploadFailureDetail({
-          files,
-          imageAssetCount: imageAssetIds.length,
-          nextSortOrder: index,
-          stage: "storing_image",
-        }),
-      });
-      const imageAssetId = await upsertImageAsset({
-        bucket,
-        database,
-        file,
-        images,
-        siteId,
-        userId,
-      });
-      imageAssetIds.push(imageAssetId);
-      await updateCaptureStatus({
-        captureId,
-        database,
-        status: "upload_failed",
-        errorMessage: "Capture image upload did not complete. Submit the capture again.",
-        errorDetail: captureUploadFailureDetail({
-          files,
-          imageAssetCount: imageAssetIds.length,
-          nextSortOrder: index,
-          stage: "linking_image",
-        }),
-      });
-      await database.insert(bottleCaptureImages).values({
-        captureId,
-        imageAssetId,
-        sortOrder: index,
-        originalFilename: file.name === "" ? null : file.name,
-      });
-    }
-  } catch (error) {
-    const details = errorDetails(error);
-    const errorMessage = "Capture image upload did not complete. Submit the capture again.";
-    await updateCaptureStatus({
-      captureId,
-      database,
-      status: "upload_failed",
-      errorMessage,
-      errorDetail: captureUploadFailureDetail({
-        error: details,
-        files,
-        imageAssetCount: imageAssetIds.length,
-        stage: "failed",
-      }),
-    });
-    logError("bottle_capture_image_intake_failed", {
-      captureId,
-      error: details,
-      fileCount: files.length,
-      imageAssetCount: imageAssetIds.length,
-      files: captureFileSummaries(files),
-      siteId,
-      storageLocationId,
-    });
-    return { captureId, errorMessage, status: "upload_failed" };
-  }
-
-  await updateCaptureStatus({
-    captureId,
-    database,
-    status: "queued",
-    errorMessage: null,
-    errorDetail: null,
-  });
-  return { captureId, status: "queued" };
-}
 
 export async function listBottleCaptures({
   captureId,
@@ -395,7 +210,11 @@ export async function getCaptureImageObject({
   readonly imageAssetId: string;
   readonly original?: boolean;
   readonly userId: string;
-}): Promise<{ readonly r2Key: string; readonly contentType: string }> {
+}): Promise<{
+  readonly r2Key: string;
+  readonly contentType: string;
+  readonly needsThumbnail: boolean;
+}> {
   const rows = await database
     .select({
       r2Key: original
@@ -404,6 +223,10 @@ export async function getCaptureImageObject({
       contentType: original
         ? imageAssets.contentType
         : sql<string>`coalesce(${imageAssets.thumbnailContentType}, ${imageAssets.contentType})`,
+      needsThumbnail: (original
+        ? sql<boolean>`0`
+        : sql<boolean>`${imageAssets.thumbnailR2Key} IS NULL`
+      ).mapWith(Boolean),
     })
     .from(bottleCaptureImages)
     .innerJoin(imageAssets, eq(bottleCaptureImages.imageAssetId, imageAssets.id))
@@ -604,16 +427,12 @@ export async function claimCaptureForImport({
   database,
   runId,
   siteId,
-  resume = false,
-  expectedReviewRevision,
   workflowInstanceId,
 }: {
   readonly captureId: string;
   readonly database: BoozeDatabase;
   readonly runId: string;
   readonly siteId: string;
-  readonly resume?: boolean;
-  readonly expectedReviewRevision?: number | undefined;
   readonly workflowInstanceId?: string | null | undefined;
 }): Promise<CaptureImportClaim | null> {
   const [claim] = await database
@@ -624,18 +443,11 @@ export async function claimCaptureForImport({
         eq(bottleCaptures.id, captureId),
         eq(bottleCaptures.siteId, siteId),
         eq(latestCaptureRunId(captureId), runId),
-        expectedReviewRevision === undefined
-          ? undefined
-          : eq(bottleCaptures.reviewRevision, expectedReviewRevision),
-        resume ? sql`${bottleCaptures.reviewCandidateJson} IS NULL` : undefined,
-        resume
-          ? sql`${bottleCaptures.status} IN ('extracting', 'importing')`
-          : eq(bottleCaptures.status, "needs_review"),
+        sql`${bottleCaptures.reviewCandidateJson} IS NULL`,
+        sql`${bottleCaptures.status} IN ('extracting', 'importing')`,
         // Historical captures without a Workflow ID have a NULL owner; omission
         // must not bypass ownership for automatic imports.
-        workflowInstanceId === undefined && !resume
-          ? undefined
-          : sql`${bottleCaptures.workflowInstanceId} IS ${workflowInstanceId ?? null}`,
+        sql`${bottleCaptures.workflowInstanceId} IS ${workflowInstanceId ?? null}`,
       ),
     )
     .returning({
@@ -724,154 +536,6 @@ export async function updateCaptureRun({
         status === "imported" ? undefined : ne(bottleCaptureRuns.status, "imported"),
       ),
     );
-}
-
-async function upsertImageAsset({
-  bucket,
-  database,
-  file,
-  images,
-  siteId,
-  userId,
-}: {
-  readonly bucket: R2Bucket;
-  readonly database: BoozeDatabase;
-  readonly file: File;
-  readonly images: ImagesBinding | undefined;
-  readonly siteId: string;
-  readonly userId: string;
-}): Promise<string> {
-  const bytes = await file.arrayBuffer();
-  const sha256 = await sha256Hex(bytes);
-  const existing = await database
-    .select({
-      id: imageAssets.id,
-      thumbnailR2Key: imageAssets.thumbnailR2Key,
-    })
-    .from(imageAssets)
-    .where(and(eq(imageAssets.siteId, siteId), eq(imageAssets.sha256, sha256)))
-    .limit(1);
-  const existingImage = existing[0];
-  if (existingImage !== undefined) {
-    if (existingImage.thumbnailR2Key === null) {
-      await createImageThumbnail({
-        bucket,
-        bytes,
-        database,
-        imageAssetId: existingImage.id,
-        images,
-        siteId,
-      });
-    }
-    return existingImage.id;
-  }
-
-  const imageAssetId = crypto.randomUUID();
-  // Keys belong to one asset lifetime. Re-uploading identical bytes after deletion
-  // must not reuse a key that the durable deletion queue may still contain.
-  const r2Key = `sites/${siteId}/images/${imageAssetId}${extensionForContentType(file.type)}`;
-  await bucket.put(r2Key, bytes, { httpMetadata: { contentType: file.type } });
-  await database
-    .insert(imageAssets)
-    .values({
-      id: imageAssetId,
-      siteId,
-      sha256,
-      r2Key,
-      contentType: file.type,
-      sizeBytes: file.size,
-      uploadedByUserId: userId,
-    })
-    .onConflictDoNothing({ target: [imageAssets.siteId, imageAssets.sha256] });
-  const [stored] = await database
-    .select({ id: imageAssets.id })
-    .from(imageAssets)
-    .where(and(eq(imageAssets.siteId, siteId), eq(imageAssets.sha256, sha256)))
-    .limit(1);
-  if (stored === undefined) {
-    throw new Error("Uploaded image asset was not persisted");
-  }
-  if (stored.id !== imageAssetId) {
-    await database
-      .insert(r2ObjectDeletionQueue)
-      .values({
-        r2Key,
-        sourceKind: "image_asset",
-        sourceId: imageAssetId,
-      })
-      .onConflictDoNothing();
-    return stored.id;
-  }
-  await createImageThumbnail({
-    bucket,
-    bytes,
-    database,
-    imageAssetId,
-    images,
-    siteId,
-  });
-  return imageAssetId;
-}
-
-async function createImageThumbnail({
-  bucket,
-  bytes,
-  database,
-  imageAssetId,
-  images,
-  siteId,
-}: {
-  readonly bucket: R2Bucket;
-  readonly bytes: ArrayBuffer;
-  readonly database: BoozeDatabase;
-  readonly imageAssetId: string;
-  readonly images: ImagesBinding | undefined;
-  readonly siteId: string;
-}): Promise<void> {
-  if (images === undefined) {
-    return;
-  }
-
-  try {
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(bytes));
-        controller.close();
-      },
-    });
-
-    const result = await images
-      .input(body)
-      .transform({
-        fit: "cover",
-        gravity: "auto",
-        height: thumbnailSizePixels,
-        width: thumbnailSizePixels,
-      })
-      .output({ format: thumbnailContentType, quality: thumbnailQuality });
-    const thumbnailBytes = await new Response(result.image()).arrayBuffer();
-    const thumbnailR2Key = `sites/${siteId}/thumbnails/${imageAssetId}${thumbnailExtension}`;
-    await bucket.put(thumbnailR2Key, thumbnailBytes, {
-      httpMetadata: { contentType: result.contentType() },
-    });
-    await database
-      .update(imageAssets)
-      .set({
-        thumbnailR2Key,
-        thumbnailContentType: result.contentType(),
-        thumbnailSizeBytes: thumbnailBytes.byteLength,
-        thumbnailWidth: thumbnailSizePixels,
-        thumbnailHeight: thumbnailSizePixels,
-        updatedAt: sql`CURRENT_TIMESTAMP`,
-      })
-      .where(eq(imageAssets.id, imageAssetId));
-  } catch (error) {
-    logError("image_thumbnail_create_failed", {
-      error: errorDetails(error),
-      imageAssetId,
-      siteId,
-    });
-  }
 }
 
 async function listCaptureImages({
@@ -976,28 +640,6 @@ async function listLatestRuns({
   );
 }
 
-async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function extensionForContentType(contentType: string): string {
-  switch (contentType) {
-    case "image/jpeg":
-      return ".jpg";
-    case "image/png":
-      return ".png";
-    case "image/webp":
-      return ".webp";
-    case "image/heic":
-      return ".heic";
-    case "image/heif":
-      return ".heif";
-    default:
-      return "";
-  }
-}
-
 function captureStatus(value: string): CaptureStatus {
   return isCaptureStatus(value) ? value : "failed";
 }
@@ -1019,43 +661,6 @@ function parseJson(value: string | null): unknown {
   } catch {
     return null;
   }
-}
-
-function captureFileSummaries(files: readonly File[]): readonly {
-  readonly contentType: string;
-  readonly sizeBytes: number;
-}[] {
-  return files.map((file) => ({ contentType: file.type, sizeBytes: file.size }));
-}
-
-function captureUploadFailureDetail({
-  error,
-  files,
-  imageAssetCount,
-  nextSortOrder,
-  stage,
-}: {
-  readonly error?: ReturnType<typeof errorDetails>;
-  readonly files: readonly File[];
-  readonly imageAssetCount: number;
-  readonly nextSortOrder?: number;
-  readonly stage: "failed" | "intake_started" | "linking_image" | "storing_image";
-}): {
-  readonly error?: ReturnType<typeof errorDetails>;
-  readonly fileCount: number;
-  readonly files: ReturnType<typeof captureFileSummaries>;
-  readonly imageAssetCount: number;
-  readonly nextSortOrder?: number;
-  readonly stage: "failed" | "intake_started" | "linking_image" | "storing_image";
-} {
-  return {
-    ...(error === undefined ? {} : { error }),
-    fileCount: files.length,
-    files: captureFileSummaries(files),
-    imageAssetCount,
-    ...(nextSortOrder === undefined ? {} : { nextSortOrder }),
-    stage,
-  };
 }
 
 export function captureDatabaseFromEnv(database: D1Database): BoozeDatabase {

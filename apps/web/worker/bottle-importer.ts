@@ -2,7 +2,9 @@ import { storedVintageLabel, storedVintageStatus } from "./api/wine-vintage.ts";
 import {
   bottleCaptureRuns,
   bottleCaptures,
+  bottleLocations,
   bottles,
+  storageLocations,
   createD1Client,
   wineries,
   wineVintages,
@@ -78,11 +80,8 @@ type CaptureImportInput = {
   readonly database: BoozeDatabase;
   readonly quantity: number;
   readonly siteId: string;
-  readonly storageLocationId: string | null;
-  readonly positionHint: string | null;
   readonly runId: string;
   readonly workflowInstanceId?: string | null | undefined;
-  readonly expectedReviewRevision?: number | undefined;
 };
 
 export class CaptureImportConflictError extends HTTPException {
@@ -131,7 +130,6 @@ export async function importBottleCandidate(
       database,
       runId,
       siteId,
-      resume: true,
       workflowInstanceId,
     });
     const skipped = {
@@ -158,7 +156,11 @@ export async function importBottleCandidate(
 }
 
 export async function importReviewedCapture(
-  input: CaptureImportInput & { readonly wineVintageId?: string | undefined },
+  input: CaptureImportInput & {
+    readonly wineVintageId?: string | undefined;
+    readonly workflowInstanceId: string | null;
+    readonly expectedReviewRevision: number;
+  },
 ): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
   const {
     captureId,
@@ -171,15 +173,9 @@ export async function importReviewedCapture(
   } = input;
   const committed = await getCommittedCaptureImport({ captureId, database, runId });
   if (committed !== null) return committed;
-  const claim = await claimCaptureForImport({
-    captureId,
-    database,
-    runId,
-    siteId,
-    workflowInstanceId,
-    expectedReviewRevision,
-  });
-  if (claim === null) throw new CaptureImportConflictError();
+  // Manual preparation is read-only. The final batch validates the reviewed
+  // snapshot and commits completion with inventory, without an intermediate claim.
+  const claim = { captureId, runId, siteId, workflowInstanceId };
   const matchResult: BottleMatchResult =
     wineVintageId === undefined
       ? { kind: "create_new", wineryCandidates: [], wineVintageCandidates: [] }
@@ -191,12 +187,18 @@ export async function importReviewedCapture(
         };
   return retryCatalogueTransaction(async () => {
     try {
-      return await commitCaptureImport({ input, claim, matchResult, wineVintageId });
+      return await commitCaptureImport({
+        input,
+        claim,
+        matchResult,
+        wineVintageId,
+        expectedReviewRevision,
+      });
     } catch (error) {
-      if (error instanceof CaptureImportConflictError) {
-        const receipt = await getCommittedCaptureImport({ captureId, database, runId });
-        if (receipt !== null) return receipt;
-      }
+      // A competing import or a lost commit acknowledgement may have completed
+      // this capture. Its durable receipt is authoritative for every retry.
+      const receipt = await getCommittedCaptureImport({ captureId, database, runId });
+      if (receipt !== null) return receipt;
       throw error;
     }
   });
@@ -207,30 +209,27 @@ async function commitCaptureImport({
   claim,
   matchResult,
   wineVintageId,
+  expectedReviewRevision,
 }: {
   readonly input: CaptureImportInput;
   readonly claim: CaptureImportClaim;
   readonly matchResult: BottleMatchResult;
   readonly wineVintageId: string | undefined;
+  readonly expectedReviewRevision?: number;
 }): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
-  const { candidate, database, quantity, storageLocationId, positionHint } = input;
+  const { candidate, database, quantity } = input;
   const { captureId, runId, siteId } = claim;
   const vintage =
     wineVintageId === undefined
       ? await prepareWineVintage({ database, siteId, wine: candidate.wine })
       : await getExistingVintage({ database, siteId, wineVintageId });
-  const destination = await currentCaptureDestination({
-    captureId,
-    database,
-    storageLocationId,
-    positionHint,
-  });
   const { bottleIds, statements } = createBottleStatements({
     bottleIds: bottleIdsForCapture({ captureId, quantity }),
     database,
     siteId,
     wineVintageId: vintage.wineVintageId,
-    ...destination,
+    storageLocationId: null,
+    positionHint: null,
     bottle: candidate.bottle,
     quantity,
   });
@@ -249,10 +248,43 @@ async function commitCaptureImport({
   });
   try {
     await database.batch([
-      captureImportGuardStatement({ claim, database }),
+      captureImportGuardStatement({
+        claim,
+        database,
+        expectedReviewRevision,
+        wineVintageId,
+        bottleIds,
+        targetWineVintageId: vintage.wineVintageId,
+      }),
       ...importCompletionStatements({ captureId, database, result, runId }),
       ...vintage.statements,
       ...statements,
+      // Read the destination in the transaction: deleting a location detaches
+      // the capture, and must not restore its stale pre-preparation location.
+      ...bottleIds.map((bottleId) =>
+        database
+          .insert(bottleLocations)
+          .select(
+            database
+              .select({
+                bottleId: sql<string>`${bottleId}`.as("bottle_id"),
+                siteId: bottleCaptures.siteId,
+                storageLocationId: sql<string>`${bottleCaptures.storageLocationId}`.as(
+                  "storage_location_id",
+                ),
+                positionHint: bottleCaptures.positionHint,
+                updatedAt: sql<string>`CURRENT_TIMESTAMP`.as("updated_at"),
+              })
+              .from(bottleCaptures)
+              .where(
+                and(
+                  eq(bottleCaptures.id, captureId),
+                  sql`${bottleCaptures.storageLocationId} IS NOT NULL`,
+                ),
+              ),
+          )
+          .onConflictDoNothing({ target: bottleLocations.bottleId }),
+      ),
     ]);
   } catch (error) {
     if (isCaptureImportGuardFailure(error)) throw new CaptureImportConflictError(error);
@@ -264,9 +296,17 @@ async function commitCaptureImport({
 function captureImportGuardStatement({
   claim,
   database,
+  expectedReviewRevision,
+  wineVintageId,
+  bottleIds,
+  targetWineVintageId,
 }: {
   readonly claim: CaptureImportClaim;
   readonly database: BoozeDatabase;
+  readonly expectedReviewRevision: number | undefined;
+  readonly wineVintageId: string | undefined;
+  readonly bottleIds: readonly string[];
+  readonly targetWineVintageId: string;
 }) {
   // D1 batches cannot branch on an UPDATE's affected-row count. This INSERT is
   // a no-op for an existing run with the current claim. A stale/missing claim
@@ -279,9 +319,28 @@ function captureImportGuardStatement({
       captureId: sql`(SELECT ${bottleCaptures.id} FROM ${bottleCaptures}
         WHERE ${bottleCaptures.id} = ${claim.captureId}
           AND ${bottleCaptures.siteId} = ${claim.siteId}
-          AND ${bottleCaptures.status} = 'importing'
+          AND ${
+            expectedReviewRevision === undefined
+              ? sql`${bottleCaptures.status} = 'importing' AND ${bottleCaptures.reviewCandidateJson} IS NULL`
+              : sql`${bottleCaptures.status} = 'needs_review' AND ${bottleCaptures.reviewRevision} = ${expectedReviewRevision}`
+          }
           AND ${bottleCaptures.workflowInstanceId} IS ${claim.workflowInstanceId}
-          AND ${latestCaptureRunId(claim.captureId)} = ${claim.runId})`,
+          AND ${latestCaptureRunId(claim.captureId)} = ${claim.runId}
+          AND (${bottleCaptures.storageLocationId} IS NULL OR EXISTS (
+            SELECT 1 FROM ${storageLocations}
+            WHERE ${storageLocations.id} = ${bottleCaptures.storageLocationId}
+              AND ${storageLocations.siteId} = ${claim.siteId}))
+          AND ${
+            wineVintageId === undefined
+              ? sql`1`
+              : sql`EXISTS (
+            SELECT 1 FROM ${wineVintages} WHERE ${wineVintages.id} = ${wineVintageId}
+              AND ${wineVintages.siteId} = ${claim.siteId})`
+          }
+          AND NOT EXISTS (SELECT 1 FROM ${bottles}
+            WHERE ${inArray(bottles.id, [...bottleIds])}
+              AND (${bottles.siteId} <> ${claim.siteId}
+                OR ${bottles.wineVintageId} <> ${targetWineVintageId})))`,
       status: "importing",
       extractorVersion: "bottle-ocr-v1",
       promptVersion: "capture-v1",
@@ -329,28 +388,6 @@ async function assertExistingBottlesMatch({
       "Capture already contains bottles for a different wine. Review the existing bottles before importing.",
     );
   }
-}
-
-async function currentCaptureDestination({
-  captureId,
-  database,
-  storageLocationId,
-  positionHint,
-}: {
-  readonly captureId: string;
-  readonly database: BoozeDatabase;
-  readonly storageLocationId: string | null;
-  readonly positionHint: string | null;
-}) {
-  const [capture] = await database
-    .select({
-      storageLocationId: bottleCaptures.storageLocationId,
-      positionHint: bottleCaptures.positionHint,
-    })
-    .from(bottleCaptures)
-    .where(eq(bottleCaptures.id, captureId))
-    .limit(1);
-  return capture ?? { storageLocationId, positionHint };
 }
 
 function importCompletionStatements({

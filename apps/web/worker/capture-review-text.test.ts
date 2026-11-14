@@ -80,13 +80,18 @@ function setup() {
   return {
     sqlite,
     candidate,
-    request: async (method: string, path: string, payload: unknown) =>
+    request: async (method: string, path: string, payload: Record<string, unknown>) =>
       app.request(
         `http://localhost${path}`,
         {
           method,
           headers: { "content-type": "application/json", "x-dev-user": "tester" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            ...(method === "POST" && path === "/bottles"
+              ? { operationId: crypto.randomUUID() }
+              : {}),
+            ...payload,
+          }),
         },
         { DB: asD1(sqlite) },
       ),

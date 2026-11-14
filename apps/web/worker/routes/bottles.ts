@@ -15,14 +15,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
+import { additionFingerprint, additionOperationIdSchema } from "../../shared/addition-operation.ts";
+import { additionReceiptStatement, getAdditionReceipt } from "../addition-receipts.ts";
 import { formatWineDisplayName, hasWineIdentity } from "../../shared/wine-identity.ts";
 
-import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../api/auth.ts";
-import {
-  createBottleStatements,
-  prepareWineVintage,
-  upsertStorageLocation,
-} from "../api/catalogue.ts";
+import { requireAuthenticatedUser, requireSitePermission } from "../api/auth.ts";
+import { createBottleStatements, prepareWineVintage } from "../api/catalogue.ts";
 import { prepareCriticReviewStatements } from "../api/critic-reviews.ts";
 import { retryCatalogueTransaction } from "../api/catalogue-transaction.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
@@ -80,10 +78,9 @@ const wineAwardInputSchema = z.object({
 });
 
 const createBottleSchema = z.object({
-  siteId: z.string().trim().min(1).optional(),
-  siteName: z.string().trim().min(1).max(80).optional(),
+  operationId: additionOperationIdSchema,
+  siteId: z.string().trim().min(1),
   storageLocationId: z.string().trim().min(1).nullable().optional(),
-  storageLocationName: z.string().trim().max(120).optional(),
   positionHint: z.string().trim().max(120).optional(),
   quantity: z.number().int().min(1).max(24).default(1),
   wine: wineInputSchema.optional(),
@@ -138,6 +135,14 @@ const patchBottleSchema = z.object({
   awards: z.array(wineAwardInputSchema).max(24).optional(),
 });
 
+const bottleAdditionResultSchema = z.object({
+  bottleIds: z.array(z.string()).min(1).readonly(),
+  siteId: z.string(),
+  storageLocationId: z.string().nullable(),
+  wineryId: z.string().nullable(),
+  wineVintageId: z.string(),
+});
+
 export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
   .get("/bottles", async (context) => {
     const database = createD1Client(context.env.DB);
@@ -161,15 +166,7 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
       secretKey: context.env.CLERK_SECRET_KEY,
     });
 
-    const siteId =
-      payload.siteId ??
-      (
-        await upsertSite({
-          database,
-          site: payload.siteName ?? "home",
-          userId: authenticatedUser.userId,
-        })
-      ).siteId;
+    const siteId = payload.siteId;
 
     await requireSitePermission({
       database,
@@ -178,17 +175,17 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
       userId: authenticatedUser.userId,
     });
 
-    const storageLocationId =
-      payload.storageLocationId ??
-      (optionalText(payload.storageLocationName) === null
-        ? null
-        : (
-            await upsertStorageLocation({
-              database,
-              siteId,
-              name: payload.storageLocationName ?? "",
-            })
-          ).storageLocationId);
+    const operation = {
+      userId: authenticatedUser.userId,
+      kind: "bottles" as const,
+      operationId: payload.operationId,
+      siteId,
+      fingerprint: await additionFingerprint(payload),
+    };
+    const replay = await getAdditionReceipt(database, operation, bottleAdditionResultSchema);
+    if (replay !== undefined) return bottleAdditionResponse(replay);
+
+    const storageLocationId = payload.storageLocationId ?? null;
 
     if (storageLocationId !== null) {
       await assertStorageLocationInSite({ database, siteId, storageLocationId });
@@ -247,18 +244,26 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
         );
       }
 
-      const [first, ...rest] = statements;
-      if (first !== undefined) await database.batch([first, ...rest]);
-      return created(
-        {
-          bottleIds,
-          siteId,
-          storageLocationId,
-          wineryId: vintage.wineryId,
-          wineVintageId: vintage.wineVintageId,
-        },
-        locationHeader(`/api/bottles/${bottleIds[0]}`),
-      );
+      const result = {
+        bottleIds,
+        siteId,
+        storageLocationId,
+        wineryId: vintage.wineryId,
+        wineVintageId: vintage.wineVintageId,
+      };
+      try {
+        await database.batch([
+          additionReceiptStatement(database, operation, result),
+          ...statements,
+        ]);
+      } catch (error) {
+        // A concurrent winner or a committed batch with a lost acknowledgement
+        // is resolved by its durable receipt; unrelated failures still surface.
+        const committed = await getAdditionReceipt(database, operation, bottleAdditionResultSchema);
+        if (committed !== undefined) return bottleAdditionResponse(committed);
+        throw error;
+      }
+      return bottleAdditionResponse(result);
     });
   })
   .patch("/bottles/:bottleId", async (context) => {
@@ -774,4 +779,8 @@ async function prepareEditedWine({
       : {}),
   });
   return { ...vintage, statements: [...guard, ...vintage.statements] };
+}
+
+function bottleAdditionResponse(result: z.infer<typeof bottleAdditionResultSchema>) {
+  return created(result, locationHeader(`/api/bottles/${result.bottleIds[0]}`));
 }
