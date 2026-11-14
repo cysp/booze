@@ -11,7 +11,8 @@ import { z } from "zod";
 import { problemResponseForError } from "./api/http.ts";
 import { calculateDrinkStatus } from "./api/inventory.ts";
 import { mcpToolAuditEventInputSchema } from "./mcp/audit.ts";
-import { decodePageCursor, pageFromRows, rowsAfterCursor, toolJson } from "./mcp/pagination.ts";
+import { decodePageCursor, pageFromRows, rowsAfterCursor } from "./read-pagination.ts";
+import { toolJson } from "./mcp/pagination.ts";
 import {
   drinkQueueStatuses,
   createReviewSourceInputSchema,

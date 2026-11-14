@@ -1,6 +1,6 @@
 import { and, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
-import type { Cursor, CursorValue } from "./pagination.ts";
+import type { Cursor, CursorValue } from "../read-pagination.ts";
 
 export type SortKey<TCursor extends Cursor> = {
   readonly cursorKey: keyof TCursor & string;
@@ -55,16 +55,7 @@ export function containsAnyText(
   return orAll(expressions.map((expression) => containsText(expression, value)));
 }
 
-export function drinkStatusExpression(now = new Date()): SQL<string> {
-  const currentYear = now.getUTCFullYear();
-  return sql<string>`case
-    when ${wineDrinkFromYear()} is null and ${wineDrinkToYear()} is null then 'unknown'
-    when ${wineDrinkToYear()} is not null and ${currentYear} > ${wineDrinkToYear()} then 'past-window'
-    when ${wineDrinkFromYear()} is not null and ${currentYear} < ${wineDrinkFromYear()} then 'hold'
-    when ${wineDrinkToYear()} is not null and ${wineDrinkToYear()} - ${currentYear} <= 2 then 'drink-soon'
-    else 'drink-now'
-  end`;
-}
+export { drinkStatusExpression } from "../api/inventory.ts";
 
 export function cursorPredicate<TCursor extends Cursor>({
   cursor,
@@ -113,12 +104,4 @@ function likePattern(value: string): string {
     .replaceAll("\\", "\\\\")
     .replaceAll("%", "\\%")
     .replaceAll("_", "\\_")}%`;
-}
-
-function wineDrinkFromYear(): SQL<number | null> {
-  return sql<number | null>`${sql.raw("wine_vintages.drink_from_year")}`;
-}
-
-function wineDrinkToYear(): SQL<number | null> {
-  return sql<number | null>`${sql.raw("wine_vintages.drink_to_year")}`;
 }

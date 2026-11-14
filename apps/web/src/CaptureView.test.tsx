@@ -1,3 +1,5 @@
+// oxlint-disable import/max-dependencies -- Capture behavior tests exercise summaries, canonical detail, actions, files, and accessibility.
+import { captureSummarySchema } from "../shared/capture-read-resources.ts";
 import type { WineOption } from "../shared/wine-options.ts";
 import { useState, type ReactElement } from "react";
 import axe from "axe-core";
@@ -41,6 +43,13 @@ async function resolvedCapture(): Promise<CaptureSubmitResult> {
   return { kind: "submitted", message: "Capture submitted." };
 }
 
+const detailFixtures = new Map<string, CaptureResource>();
+
+async function openReview(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole("button", { name: "Review capture" }));
+  await screen.findByRole("textbox", { name: "Bottle notes" });
+}
+
 function captureElement({
   captures = capturesFixture,
   wines = [],
@@ -63,10 +72,44 @@ function captureElement({
   ) => Promise<CaptureSubmitResult>;
   readonly onCancelAddition?: (siteId: string) => void;
 } = {}) {
+  for (const capture of captures) detailFixtures.set(capture.id, capture);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const id = decodeURIComponent(
+        new URL(
+          input instanceof Request ? input.url : String(input),
+          window.location.origin,
+        ).pathname
+          .split("/")
+          .at(-1) ?? "",
+      );
+      return new Response(JSON.stringify({ data: detailFixtures.get(id) }), {
+        status: detailFixtures.has(id) ? 200 : 404,
+      });
+    }),
+  );
   return (
     <CaptureArea
-      captures={captures}
+      captures={captures.map((capture) =>
+        captureSummarySchema.parse({
+          ...capture,
+          imageCount: capture.images.length,
+          previewImage: capture.images[0] ?? null,
+        }),
+      )}
       wines={wines}
+      counts={{
+        actionable: captures.filter((capture) =>
+          ["failed", "needs_review", "upload_failed"].includes(capture.status),
+        ).length,
+        processing: captures.filter((capture) =>
+          ["uploading", "queued", "extracting", "importing"].includes(capture.status),
+        ).length,
+        imported: captures.filter((capture) => capture.status === "imported").length,
+      }}
+      totalCount={captures.length}
+      hasMore={false}
       form={captureForm}
       isSaving={false}
       locations={locationsFixture}
@@ -122,6 +165,7 @@ it("shows actionable import errors on the affected capture", async () => {
     "Capture processing changed before import. Refresh the capture before trying again.";
   const onImport = vi.fn<CaptureImportAction>(async () => ({ ok: false, message }));
   renderCapture({ captures: [captureFixture({ latestRun: incompleteRun })], onImport });
+  await openReview(user);
   await user.click(screen.getByRole("button", { name: "Create new" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
     expectedReviewRevision: 0,
@@ -133,6 +177,7 @@ it("passes an existing wine selection through the import action", async () => {
   const user = userEvent.setup();
   const onImport = vi.fn<CaptureImportAction>(resolvedImport);
   renderCapture({ captures: [captureFixture({ latestRun: incompleteRun })], onImport });
+  await openReview(user);
   await user.click(screen.getByRole("button", { name: "Use Existing Shiraz" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", "existing", {
     expectedReviewRevision: 0,
@@ -145,10 +190,13 @@ function photo(name: string): File {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  detailFixtures.clear();
 });
 
 describe("CaptureArea photo picker", () => {
-  it("opens retained original photos for checking label evidence", () => {
+  it("opens retained original photos for checking label evidence", async () => {
+    const user = userEvent.setup();
     renderCapture({
       captures: [
         captureFixture({
@@ -165,6 +213,7 @@ describe("CaptureArea photo picker", () => {
         }),
       ],
     });
+    await openReview(user);
     expect(screen.getByRole("link", { name: "Open original photo front.jpg" })).toHaveAttribute(
       "href",
       "/api/bottle-captures/capture-1/images/image-1?original=1",
@@ -300,6 +349,9 @@ function QuantityCaptureHarness({
   return (
     <CaptureArea
       captures={[]}
+      counts={{ actionable: 0, processing: 0, imported: 0 }}
+      totalCount={0}
+      hasMore={false}
       form={form}
       setForm={setForm}
       isSaving={false}
@@ -348,6 +400,7 @@ it("saves manual corrections separately and requires an explicit revision-aware 
     onSaveReview,
     onImport,
   });
+  await openReview(user);
   await user.clear(screen.getByRole("textbox", { name: "Producer / winery" }));
   await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), "RIKARD");
   expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
@@ -378,6 +431,7 @@ it("retains cleared values and edits when saving corrections fails", async () =>
     message: "Another editor changed this capture. Refresh before saving.",
   }));
   renderCapture({ captures: [captureFixture({ latestRun: incompleteRun })], onSaveReview });
+  await openReview(user);
   await user.clear(screen.getByRole("textbox", { name: "Bottle size (ml)" }));
   await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Check cork");
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
@@ -400,6 +454,7 @@ it("requires saving an empty manual review before explicit unidentified import",
     onSaveReview,
     onImport,
   });
+  await openReview(user);
   expect(screen.getByRole("button", { name: "Save as unidentified wine" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   expect(onImport).not.toHaveBeenCalled();
@@ -453,6 +508,7 @@ it.each([
     })),
     onImport,
   });
+  await openReview(user);
   expect(screen.queryByRole("button", { name: "Use Existing Shiraz" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Use selected wine" })).toBeDisabled();
   await user.click(screen.getByRole("combobox", { name: "Existing wine in this site" }));
@@ -482,6 +538,7 @@ it.each([0, 1])(
             },
     });
     const { rerender } = renderCapture({ captures: [capture] });
+    await openReview(user);
     const producer = screen.getByRole("textbox", { name: "Producer / winery" });
     await user.clear(producer);
     await user.type(producer, "My unsaved correction");
@@ -489,7 +546,7 @@ it.each([0, 1])(
     expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue(
       "My unsaved correction",
     );
-    expect(producer).toHaveAttribute("aria-disabled", "true");
+    await waitFor(() => expect(producer).toHaveAttribute("aria-disabled", "true"));
     expect(producer).toHaveAttribute("readonly");
     await user.type(producer, "unavailable edit");
     expect(producer).toHaveValue("My unsaved correction");
@@ -527,6 +584,7 @@ it("can reuse a depleted wine after saving capture corrections", async () => {
     wines: [depletedWine],
     onImport,
   });
+  await openReview(user);
   await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Manual bottle note");
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   await user.click(screen.getByRole("combobox", { name: "Existing wine in this site" }));
@@ -541,6 +599,7 @@ it("retains a local draft for reference when another editor imports the capture"
   const user = userEvent.setup();
   const capture = captureFixture({ latestRun: incompleteRun });
   const { rerender } = renderCapture({ captures: [capture] });
+  await openReview(user);
   await user.type(
     screen.getByRole("textbox", { name: "Bottle notes" }),
     "Unsubmitted bottle correction",
@@ -550,7 +609,7 @@ it("retains a local draft for reference when another editor imports the capture"
     "Unsubmitted bottle correction",
   );
   const notes = screen.getByRole("textbox", { name: "Bottle notes" });
-  expect(notes).toHaveAttribute("aria-disabled", "true");
+  await waitFor(() => expect(notes).toHaveAttribute("aria-disabled", "true"));
   expect(notes).toHaveAttribute("readonly");
   await user.type(notes, "unavailable edit");
   expect(notes).toHaveValue("Unsubmitted bottle correction");
@@ -558,28 +617,38 @@ it("retains a local draft for reference when another editor imports the capture"
   expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
 });
 
-it("keeps a dirty capture mounted when a new upload pushes it beyond the visible page", async () => {
+it("keeps an opened dirty capture mounted when a refreshed page no longer contains it", async () => {
   const user = userEvent.setup();
-  const captures = Array.from({ length: 50 }, (_, index) =>
-    captureFixture({ id: `capture-${index}`, status: index === 49 ? "needs_review" : "queued" }),
-  );
-  const { rerender } = renderCapture({ captures });
+  const retained = captureFixture({ id: "retained", status: "needs_review" });
+  const { rerender } = renderCapture({ captures: [retained] });
+  await openReview(user);
   await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Keep this draft");
-  rerender(
-    captureElement({
-      captures: [captureFixture({ id: "new-capture", status: "queued" }), ...captures],
-    }),
-  );
-  expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
-  expect(screen.getByText("Showing all 51 captures")).toBeVisible();
-  const newer = Array.from({ length: 101 }, (_, index) =>
+  const newer = Array.from({ length: 50 }, (_, index) =>
     captureFixture({ id: `new-${index}`, status: "queued" }),
   );
-  rerender(captureElement({ captures: [...newer, ...captures] }));
-  expect(screen.getByText("Showing 51 of 151 captures")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Show 50 more" }));
-  expect(screen.getByText("Showing 101 of 151 captures")).toBeVisible();
+  rerender(captureElement({ captures: newer }));
   expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
+  expect(screen.getByText("Showing 50 of 50 matching captures")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Close details" })).toBeDisabled();
+});
+
+it("retains an off-page review draft when capture deletion is cancelled", async () => {
+  const user = userEvent.setup();
+  const onDelete = vi.fn(resolvedTrue);
+  const { rerender } = renderCapture({ captures: [captureFixture()], onDelete });
+  await openReview(user);
+  await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Keep pending correction");
+  rerender(captureElement({ captures: [], onDelete }));
+  await user.click(screen.getByRole("button", { name: "Delete capture" }));
+  await user.click(
+    within(screen.getByRole("alertdialog", { name: "Delete this capture?" })).getByRole("button", {
+      name: "Cancel",
+    }),
+  );
+  expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue(
+    "Keep pending correction",
+  );
+  expect(onDelete).not.toHaveBeenCalled();
 });
 
 it("retains incomplete submission photos and exposes deliberate start-another intent for the current site", async () => {

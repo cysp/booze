@@ -83,7 +83,7 @@ await describe("wine selection collection", async () => {
         { headers: { "x-dev-user": "stranger" } },
         env,
       );
-      assert.deepEqual(await stranger.json(), { data: [] });
+      assert.deepEqual(await stranger.json(), { data: [], totalCount: 0, nextPageToken: null });
       const unauthenticated = await app.request("http://localhost/wines", {}, env);
       assert.notEqual(unauthenticated.status, 200);
     } finally {

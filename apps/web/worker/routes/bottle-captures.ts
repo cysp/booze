@@ -6,6 +6,8 @@ import { HTTPException } from "hono/http-exception";
 import { captureReviewCandidateSchema, isIdentifiedCapture } from "../../shared/capture-review.ts";
 import { candidateValidationIssueSchema } from "../../shared/catalogue-inputs.ts";
 import { additionOperationIdSchema } from "../../shared/addition-operation.ts";
+import { entityIdSchema } from "../../shared/entity-id.ts";
+import { captureListQuerySchema } from "../capture-query-inputs.ts";
 import { validateBottleQuantity } from "../../shared/quantity.ts";
 import { z } from "zod";
 
@@ -23,6 +25,7 @@ import {
   getBottleCapture,
   getCaptureImageObject,
   listBottleCaptures,
+  listBottleCaptureStatuses,
   reserveCaptureRetry,
   updateCaptureStatus,
 } from "../capture-store.ts";
@@ -30,7 +33,7 @@ import { deleteBottleCaptureData, tryDrainR2ObjectDeletionQueue } from "../delet
 import { errorDetails, logError } from "../observability.ts";
 
 const manualImportSchema = z.object({
-  wineVintageId: z.string().trim().min(1).optional(),
+  wineVintageId: entityIdSchema.optional(),
   expectedReviewRevision: z.number().int().nonnegative().default(0),
   allowUnidentified: z.boolean().default(false),
 });
@@ -44,8 +47,29 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
+    const query = captureListQuerySchema.parse({
+      limit: context.req.query("limit"),
+      pageToken: context.req.query("pageToken"),
+      view: context.req.query("view"),
+    });
+    return context.json(
+      await listBottleCaptures({ database, query, userId: authenticatedUser.userId }),
+    );
+  })
+  .get("/bottle-capture-statuses", async (context) => {
+    const database = createD1Client(context.env.DB);
+    const authenticatedUser = await requireAuthenticatedUser({
+      database,
+      request: context.req.raw,
+      headers: context.req.raw.headers,
+      secretKey: context.env.CLERK_SECRET_KEY,
+    });
     return context.json({
-      data: await listBottleCaptures({ database, userId: authenticatedUser.userId }),
+      data: await listBottleCaptureStatuses({
+        captureIds: context.req.queries("captureId") ?? [],
+        database,
+        userId: authenticatedUser.userId,
+      }),
     });
   })
   .post("/bottle-captures", async (context) => {
@@ -62,7 +86,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       secretKey: context.env.CLERK_SECRET_KEY,
     });
     const formData = await readCaptureFormData(context.req.raw);
-    const siteId = z.string().trim().min(1).parse(stringField(formData, "siteId"));
+    const siteId = entityIdSchema.parse(stringField(formData, "siteId"));
     const operationId = additionOperationIdSchema.parse(stringField(formData, "operationId"));
     await requireSitePermission({
       database,
@@ -70,7 +94,9 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       siteId,
       userId: authenticatedUser.userId,
     });
-    const storageLocationId = optionalText(stringField(formData, "storageLocationId"));
+    const locationId = stringField(formData, "storageLocationId");
+    const storageLocationId =
+      locationId === undefined || locationId === "" ? null : entityIdSchema.parse(locationId);
     const files = formData.getAll("images").filter((entry) => entry instanceof File);
 
     const capture = await createBottleCapture({

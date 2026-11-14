@@ -1,7 +1,8 @@
 // oxlint-disable import/max-dependencies -- Catalogue controllers coordinate domain payloads, durable addition identity, and mutation feedback.
+import { bottleResourceSchema } from "../shared/catalogue-resources.ts";
 import { contentDigest } from "../shared/addition-operation.ts";
 import { PendingAdditionChangedError, useAdditionOperation } from "./useAdditionOperation.ts";
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type {
   CaptureImportAction,
@@ -12,11 +13,11 @@ import type {
 } from "../shared/capture-import.ts";
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
 import { validateBottleQuantity } from "../shared/quantity.ts";
-import { bottleCreatePayload, bottleEditPayload } from "./bottle-payload.ts";
 import type { BottleModalSubmit, BottleModalSubmitResult } from "./BottleModal.tsx";
 import type { CaptureSubmitResult } from "./CaptureView.tsx";
 import type { MutationCompletion } from "./useCatalogue.ts";
 import {
+  inventoryItem,
   formStateForItem,
   initialCaptureFormState,
   initialFormState,
@@ -49,7 +50,7 @@ export type BottleController = {
   readonly editingForm: FormState | null;
   readonly isAddOpen: boolean;
   readonly isSaving: boolean;
-  readonly openBottleEditor: Dispatch<SetStateAction<InventoryItem | null>>;
+  readonly openBottleEditor: (item: { readonly id: string }) => Promise<void>;
   readonly saveBottle: (submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
   readonly saveBottleEdit: (submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
   readonly setEditingBottle: Dispatch<SetStateAction<InventoryItem | null>>;
@@ -111,6 +112,39 @@ export function useBottleController({
   }
   const [isSaving, setIsSaving] = useState(false);
   const editingForm = editingBottle === null ? null : formStateForItem(editingBottle);
+  const editorRequest = useRef(0);
+  const actor = useRef({ additionScope, getAuthHeaders });
+  actor.current = { additionScope, getAuthHeaders };
+  useEffect(() => {
+    setEditingBottle(null);
+    return () => {
+      editorRequest.current += 1;
+    };
+  }, [additionScope, getAuthHeaders]);
+
+  async function openBottleEditor(target: { readonly id: string }): Promise<void> {
+    editorRequest.current += 1;
+    const version = editorRequest.current;
+    const isCurrent = () =>
+      version === editorRequest.current &&
+      actor.current.additionScope === additionScope &&
+      actor.current.getAuthHeaders === getAuthHeaders;
+    setStatus("Loading bottle details...");
+    try {
+      const response = await fetch(`/api/bottles/${encodeURIComponent(target.id)}`, {
+        headers: await getAuthHeaders(),
+      });
+      if (!response.ok) throw new Error("Bottle details unavailable");
+      const payload: unknown = await response.json();
+      const detail = bottleResourceSchema.parse(objectProperty(payload, "data"));
+      if (!isCurrent()) return;
+      setEditingBottle(inventoryItem(detail));
+      setStatus("Bottle details loaded.");
+    } catch {
+      if (isCurrent())
+        setStatus("Bottle details could not be loaded. Try opening the bottle again.");
+    }
+  }
 
   useDefaultSite(writableSites, setAddFormDefaults);
 
@@ -129,6 +163,7 @@ export function useBottleController({
     setIsSaving(true);
     setStatus("Saving bottle...");
     try {
+      const { bottleCreatePayload } = await import("./bottle-payload.ts");
       const payload = {
         ...bottleCreatePayload(submission),
         siteId: form.siteId,
@@ -232,6 +267,7 @@ export function useBottleController({
     }
     setIsSaving(true);
     try {
+      const { bottleEditPayload } = await import("./bottle-payload.ts");
       const updated = await patchBottle({
         bottleId: editingBottle.id,
         payload: bottleEditPayload(submission, editingBottle),
@@ -270,7 +306,7 @@ export function useBottleController({
     editingForm,
     isAddOpen,
     isSaving,
-    openBottleEditor: setEditingBottle,
+    openBottleEditor,
     saveBottle,
     saveBottleEdit,
     setEditingBottle,
@@ -286,8 +322,10 @@ export function useCaptureController({
   getAuthHeaders,
   setStatus,
   writableSites,
+  trackPendingCapture,
 }: SharedControllerContext & {
   readonly writableSites: readonly SiteItem[];
+  readonly trackPendingCapture?: (captureId: string) => void;
 }): CaptureController {
   const [captureForm, setCaptureForm] = useState<CaptureFormState>(initialCaptureFormState);
   const addition = useAdditionOperation("capture", additionScope);
@@ -365,6 +403,8 @@ export function useCaptureController({
         return savedResult;
       }
       const data = objectProperty(responsePayload, "data");
+      const captureId = objectProperty(data, "captureId");
+      if (typeof captureId === "string") trackPendingCapture?.(captureId);
       if (objectProperty(data, "intakeComplete") !== true) {
         const message =
           captureSubmitErrorMessage(responsePayload) ??
@@ -424,6 +464,7 @@ export function useCaptureController({
       setStatus("Capture was not retried.");
       return false;
     }
+    trackPendingCapture?.(captureId);
     await completeMutation({ refresh: "captures", successMessage: "Capture retry started." });
     return true;
   }

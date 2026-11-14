@@ -9,7 +9,7 @@ import {
 import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
+import { decodePageCursor, pageFromRows, pageLimit, type Page } from "../read-pagination.ts";
 import type { listWineriesInputSchema, winerySummarySchema } from "./schemas.ts";
 import {
   andAll,

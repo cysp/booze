@@ -41,7 +41,7 @@ import {
 } from "./operation-transaction.ts";
 
 const wineAwardInputSchema = z.object({
-  id: z.string().trim().min(1).max(120).optional(),
+  id: entityIdSchema.optional(),
   awardName: z.string().trim().min(1).max(180),
   awardLevel: z.string().trim().min(1).max(80),
   awardYear: z.number().int().min(1800).max(2200).optional(),

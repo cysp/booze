@@ -13,6 +13,10 @@ import type {
   CaptureImportResult,
   CaptureReviewSaveAction,
 } from "../shared/capture-import.ts";
+import { captureResourceSchema } from "../shared/capture-resources.ts";
+import type { CaptureSummary, CaptureCounts } from "../shared/capture-read-resources.ts";
+import type { AuthHeadersProvider } from "./useReadPage.ts";
+import { ReadPageStatus } from "./ReadPageStatus.tsx";
 import { formatWineLabel } from "../shared/wine-identity.ts";
 import { validateBottleQuantity } from "../shared/quantity.ts";
 import { QuantityInput } from "./QuantityInput.tsx";
@@ -26,15 +30,23 @@ import type {
 import { storageLocationLabel } from "./inventory-model.ts";
 import { BottleLocationPicker } from "./BottleLocationPicker.tsx";
 import { DestructiveActionDialog } from "./DestructiveActionDialog.tsx";
-import { ProgressiveListStatus, PROGRESSIVE_PAGE_SIZE } from "./ProgressiveListStatus.tsx";
 import { MAX_CAPTURE_FILES, mergeCaptureFiles } from "./capture-files.ts";
 import { captureStatus } from "./capture-status.ts";
 import type { WineOption } from "../shared/wine-options.ts";
 import { CaptureReview } from "./CaptureReview.tsx";
 
 type CaptureAreaProps = {
-  readonly captures: readonly CaptureResource[];
+  readonly captures: readonly CaptureSummary[];
   readonly wines?: readonly WineOption[];
+  readonly getAuthHeaders?: AuthHeadersProvider;
+  readonly counts: CaptureCounts;
+  readonly totalCount: number;
+  readonly hasMore: boolean;
+  readonly isLoading?: boolean;
+  readonly isLoadingMore?: boolean;
+  readonly onLoadMore?: () => Promise<unknown>;
+  readonly view?: "action" | "all";
+  readonly onViewChange?: (view: "action" | "all") => void;
   readonly form: CaptureFormState;
   readonly isSaving: boolean;
   readonly locations: readonly LocationItem[];
@@ -70,6 +82,17 @@ export type CaptureSubmitResult =
 export function CaptureArea({
   captures,
   wines = [],
+  getAuthHeaders,
+  counts,
+  totalCount,
+  hasMore,
+  isLoading = false,
+  isLoadingMore = false,
+  onLoadMore = async () => {
+    /* No further pages for standalone capture renderers. */
+  },
+  view = "action",
+  onViewChange,
   form,
   isSaving,
   locations,
@@ -293,6 +316,15 @@ export function CaptureArea({
 
       <CaptureDashboard
         captures={captures}
+        counts={counts}
+        totalCount={totalCount}
+        hasMore={hasMore}
+        isLoading={isLoading}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={onLoadMore}
+        view={view}
+        onViewChange={onViewChange}
+        getAuthHeaders={getAuthHeaders}
         wines={wines}
         locations={locations}
         writableSiteIds={writableSiteIds}
@@ -337,9 +369,20 @@ function SelectedPhoto({
   );
 }
 
+const noAuth: AuthHeadersProvider = async () => ({});
+
 function CaptureDashboard({
   captures,
   wines,
+  counts,
+  totalCount,
+  hasMore,
+  isLoading,
+  isLoadingMore,
+  onLoadMore,
+  view,
+  onViewChange,
+  getAuthHeaders,
   locations,
   writableSiteIds,
   onDelete,
@@ -347,8 +390,17 @@ function CaptureDashboard({
   onSaveReview,
   onRetry,
 }: {
-  readonly captures: readonly CaptureResource[];
+  readonly captures: readonly CaptureSummary[];
   readonly wines: readonly WineOption[];
+  readonly counts: CaptureCounts;
+  readonly totalCount: number;
+  readonly hasMore: boolean;
+  readonly isLoading: boolean;
+  readonly isLoadingMore: boolean;
+  readonly onLoadMore: () => Promise<unknown>;
+  readonly view: "action" | "all";
+  readonly onViewChange: ((view: "action" | "all") => void) | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider | undefined;
   readonly locations: readonly LocationItem[];
   readonly writableSiteIds: ReadonlySet<string>;
   readonly onDelete: (captureId: string) => Promise<boolean>;
@@ -356,70 +408,71 @@ function CaptureDashboard({
   readonly onSaveReview: CaptureReviewSaveAction;
   readonly onRetry: (captureId: string) => Promise<boolean>;
 }): ReactElement {
-  const [showAll, setShowAll] = useState(false);
-  const [dirtyCaptureIds, setDirtyCaptureIds] = useState<ReadonlySet<string>>(new Set());
-  const [deletingCapture, setDeletingCapture] = useState<CaptureResource | null>(null);
-  const [visibleCount, setVisibleCount] = useState(PROGRESSIVE_PAGE_SIZE);
+  const [localView, setLocalView] = useState(view);
+  const actualView = onViewChange === undefined ? localView : view;
+  const [opened, setOpened] = useState<ReadonlyMap<string, CaptureSummary>>(new Map());
+  const [deletingCapture, setDeletingCapture] = useState<CaptureSummary | null>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement>(null);
   const sectionHeadingRef = useRef<HTMLHeadingElement>(null);
-
-  const actionableCaptures = captures.filter((capture) => isActionableCapture(capture));
-  const displayedCaptures = showAll
-    ? captures
-    : captures.filter(
-        (capture) => capture.status !== "imported" || dirtyCaptureIds.has(capture.id),
-      );
-  const visibleCaptures = displayedCaptures.filter(
-    (capture, index) => index < visibleCount || dirtyCaptureIds.has(capture.id),
+  const displayed = captures.filter(
+    (capture) => actualView === "all" || capture.status !== "imported",
   );
-  const hiddenCaptureCount = captures.filter((capture) => capture.status === "imported").length;
-  const processingCaptureCount = captures.length - hiddenCaptureCount - actionableCaptures.length;
-
+  const displayedIds = new Set(displayed.map((capture) => capture.id));
+  const visibleCaptures = [
+    ...displayed,
+    ...[...opened.values()].filter((capture) => !displayedIds.has(capture.id)),
+  ];
+  const allCount = counts.actionable + counts.processing + counts.imported;
   return (
     <>
       <div className="capture-list-header">
         <div>
           <h3 ref={sectionHeadingRef} tabIndex={-1}>
-            {showAll ? "All captures" : "Action needed"}
+            {actualView === "all" ? "All captures" : "Action needed"}
           </h3>
           <p>
-            {actionableCaptures.length === 0
+            {counts.actionable === 0
               ? "No captures need action."
-              : `${actionableCaptures.length} capture${actionableCaptures.length === 1 ? "" : "s"} need action.`}
-            {processingCaptureCount === 0
+              : `${counts.actionable} capture${counts.actionable === 1 ? "" : "s"} need action.`}
+            {counts.processing === 0
               ? null
-              : ` ${processingCaptureCount} processing. Progress updates automatically.`}
+              : ` ${counts.processing} processing. Progress updates automatically.`}
           </p>
         </div>
-        {hiddenCaptureCount === 0 ? null : (
+        {counts.imported === 0 ? null : (
           <Button
-            label={showAll ? "Show action needed" : `Show all ${captures.length}`}
+            label={actualView === "all" ? "Show action needed" : `Show all ${allCount}`}
             variant="secondary"
             onClick={() => {
-              setShowAll(!showAll);
-              setVisibleCount(PROGRESSIVE_PAGE_SIZE);
+              const next = actualView === "all" ? "action" : "all";
+              setLocalView(next);
+              onViewChange?.(next);
             }}
           />
         )}
       </div>
-      {captures.length === 0 ? (
+      {isLoading ? (
+        <p role="status">Loading captures…</p>
+      ) : allCount === 0 && visibleCaptures.length === 0 ? (
         <EmptyState
           description="Submit bottle photos here and imported bottles will appear in inventory."
           title="No captures yet"
         />
-      ) : displayedCaptures.length === 0 ? (
+      ) : visibleCaptures.length === 0 ? (
         <EmptyState
-          description={`${hiddenCaptureCount} capture${hiddenCaptureCount === 1 ? " has" : "s have"} been imported.`}
+          description={`${counts.imported} capture${counts.imported === 1 ? " has" : "s have"} been imported.`}
           title="Nothing to action"
         />
       ) : (
         <div className="capture-list">
           {visibleCaptures.map((capture) => (
             <CaptureCard
+              key={capture.id}
               capture={capture}
               wines={wines}
+              getAuthHeaders={getAuthHeaders}
+              listed={displayedIds.has(capture.id)}
               canWrite={writableSiteIds.has(capture.siteId)}
-              key={capture.id}
               locations={locations}
               onImport={onImport}
               onSaveReview={onSaveReview}
@@ -427,10 +480,10 @@ function CaptureDashboard({
                 deleteTriggerRef.current = trigger;
                 setDeletingCapture(target);
               }}
-              onReviewDirtyChange={(dirty) => {
-                setDirtyCaptureIds((current) => {
-                  const next = new Set(current);
-                  if (dirty) next.add(capture.id);
+              onOpenedChange={(isOpen) => {
+                setOpened((current) => {
+                  const next = new Map(current);
+                  if (isOpen) next.set(capture.id, capture);
                   else next.delete(capture.id);
                   return next;
                 });
@@ -440,25 +493,16 @@ function CaptureDashboard({
           ))}
         </div>
       )}
-      <ProgressiveListStatus
-        getRevealFocusTarget={() => {
-          const capture = displayedCaptures
-            .slice(visibleCount)
-            .find((item) => !dirtyCaptureIds.has(item.id));
-          return capture === undefined ? null : captureCard(capture.id);
-        }}
+      <ReadPageStatus
         itemLabel="captures"
-        totalCount={displayedCaptures.length}
-        visibleCount={visibleCaptures.length}
-        onReveal={(count) => {
-          let next = visibleCount;
-          let remaining = count - visibleCaptures.length;
-          for (const capture of displayedCaptures.slice(visibleCount)) {
-            if (remaining === 0) break;
-            next += 1;
-            if (!dirtyCaptureIds.has(capture.id)) remaining -= 1;
-          }
-          setVisibleCount(next);
+        totalCount={totalCount}
+        visibleCount={displayed.length}
+        hasMore={hasMore}
+        isLoading={isLoadingMore}
+        onLoadMore={onLoadMore}
+        getRevealFocusTarget={(firstRevealedIndex) => {
+          const capture = captures[firstRevealedIndex];
+          return capture === undefined ? null : captureCard(capture.id);
         }}
       />
       {deletingCapture === null ? null : (
@@ -470,11 +514,19 @@ function CaptureDashboard({
           isOpen
           returnFocusRef={deleteTriggerRef}
           title="Delete this capture?"
-          onAction={async () => onDelete(deletingCapture.id)}
+          onAction={async () => {
+            const deletedId = deletingCapture.id;
+            const deleted = await onDelete(deletedId);
+            if (deleted)
+              setOpened((current) => {
+                const next = new Map(current);
+                next.delete(deletedId);
+                return next;
+              });
+            return deleted;
+          }}
           onOpenChange={(isOpen) => {
-            if (!isOpen) {
-              setDeletingCapture(null);
-            }
+            if (!isOpen) setDeletingCapture(null);
           }}
         />
       )}
@@ -482,6 +534,7 @@ function CaptureDashboard({
   );
 }
 
+// oxlint-disable-next-line complexity -- The card keeps selected detail, review drafts, pending actions, and their accessibility feedback together.
 function CaptureCard({
   canWrite,
   wines,
@@ -490,17 +543,21 @@ function CaptureCard({
   onImport,
   onSaveReview,
   onRequestDelete,
-  onReviewDirtyChange,
+  onOpenedChange,
+  getAuthHeaders,
+  listed,
   onRetry,
 }: {
   readonly canWrite: boolean;
   readonly wines: readonly WineOption[];
-  readonly capture: CaptureResource;
+  readonly capture: CaptureSummary;
   readonly locations: readonly LocationItem[];
   readonly onImport: CaptureImportAction;
   readonly onSaveReview: CaptureReviewSaveAction;
-  readonly onRequestDelete: (capture: CaptureResource, trigger: HTMLButtonElement) => void;
-  readonly onReviewDirtyChange: (dirty: boolean) => void;
+  readonly onRequestDelete: (capture: CaptureSummary, trigger: HTMLButtonElement) => void;
+  readonly onOpenedChange: (opened: boolean) => void;
+  readonly getAuthHeaders: AuthHeadersProvider | undefined;
+  readonly listed: boolean;
   readonly onRetry: (captureId: string) => Promise<boolean>;
 }): ReactElement {
   const [pendingAction, setPendingAction] = useState<CaptureCardAction | null>(null);
@@ -508,7 +565,40 @@ function CaptureCard({
   const [actionError, setActionError] = useState<string | null>(null);
   const [hasUnsavedReview, setHasUnsavedReview] = useState(false);
   const [isReviewBusy, setIsReviewBusy] = useState(false);
-  const canReview = capture.status === "needs_review" || capture.status === "failed";
+  const [opened, setOpened] = useState(false);
+  const [detail, setDetail] = useState<CaptureResource | null>(null);
+  const [detailError, setDetailError] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRetry, setDetailRetry] = useState(0);
+  useEffect(() => {
+    let current = true;
+    if (opened) {
+      setDetailLoading(true);
+      void (async () => {
+        try {
+          const response = await fetch(`/api/bottle-captures/${encodeURIComponent(capture.id)}`, {
+            headers: await (getAuthHeaders ?? noAuth)(),
+          });
+          if (!response.ok) throw new Error("Capture detail failed");
+          const payload: unknown = await response.json();
+          const data = captureResourceSchema.parse(candidateProperty(payload, "data"));
+          if (current) {
+            setDetail(data);
+            setDetailError(false);
+          }
+        } catch {
+          if (current) setDetailError(true);
+        } finally {
+          if (current) setDetailLoading(false);
+        }
+      })();
+    }
+    return () => {
+      current = false;
+    };
+  }, [capture.id, capture.status, capture.updatedAt, detailRetry, getAuthHeaders, listed, opened]);
+  const status = detail?.status ?? capture.status;
+  const canReview = status === "needs_review" || status === "failed";
 
   async function runAction(
     pending: CaptureCardAction,
@@ -542,24 +632,29 @@ function CaptureCard({
 
   return (
     <article
-      className={`capture-card capture-${capture.status}`}
+      className={`capture-card capture-${status}`}
       data-capture-id={capture.id}
       tabIndex={-1}
     >
       <div className="card-title">
         <div>
-          <h3>{captureTitle(capture)}</h3>
+          <h3>{detail === null ? `Capture ${capture.id.slice(0, 8)}` : captureTitle(detail)}</h3>
           <p>{captureStoragePath(capture, locations)}</p>
         </div>
-        <Badge
-          label={captureStatus(capture.status).label}
-          variant={captureStatus(capture.status).badge}
-        />
+        <Badge label={captureStatus(status).label} variant={captureStatus(status).badge} />
       </div>
       <div className="capture-thumbnails">
-        {capture.images.map((image) => (
-          <CaptureThumbnail image={image} key={image.imageAssetId} />
-        ))}
+        {detail === null ? (
+          capture.previewImage === null ? null : (
+            <Thumbnail
+              alt="Bottle photo preview"
+              label={`${capture.imageCount} photos`}
+              src={capture.previewImage.imageUrl}
+            />
+          )
+        ) : (
+          detail.images.map((image) => <CaptureThumbnail image={image} key={image.imageAssetId} />)
+        )}
       </div>
       <dl>
         <div>
@@ -568,27 +663,55 @@ function CaptureCard({
         </div>
         <div>
           <dt>Candidate</dt>
-          <dd>{candidateLabel(capture.reviewCandidate ?? capture.latestRun?.importCandidate)}</dd>
+          <dd>{candidateLabel(detail?.reviewCandidate ?? detail?.latestRun?.importCandidate)}</dd>
         </div>
         <div>
           <dt>Issue</dt>
           <dd>
             <CaptureIssue
-              message={capture.errorMessage ?? capture.latestRun?.errorMessage ?? null}
+              message={
+                detail?.errorMessage ??
+                capture.errorMessage ??
+                detail?.latestRun?.errorMessage ??
+                null
+              }
             />
           </dd>
         </div>
       </dl>
-      <ImportedCaptureReviewNotice status={capture.status} hasUnsavedReview={hasUnsavedReview} />
-      {canReview || hasUnsavedReview || isReviewBusy ? (
+      <ImportedCaptureReviewNotice status={status} hasUnsavedReview={hasUnsavedReview} />
+      <Button
+        label={opened ? "Close details" : canReview ? "Review capture" : "View capture details"}
+        isDisabled={opened && (hasUnsavedReview || isReviewBusy || pendingAction !== null)}
+        onClick={() => {
+          setOpened(!opened);
+          onOpenedChange(!opened);
+        }}
+      />
+      {detailLoading && detail === null ? <p role="status">Loading capture details…</p> : null}
+      {detailError ? (
+        <Banner
+          status="warning"
+          title="Capture details could not be refreshed."
+          endContent={
+            <Button
+              label="Retry capture details"
+              onClick={() => {
+                setDetailRetry((value) => value + 1);
+              }}
+            />
+          }
+        />
+      ) : null}
+      {opened && detail !== null && (canReview || hasUnsavedReview || isReviewBusy) ? (
         <CaptureReview
-          capture={capture}
+          capture={detail}
           wines={wines}
+          getAuthHeaders={getAuthHeaders}
           canWrite={canWrite}
           disabled={pendingAction !== null || !canReview}
           onDirtyChange={(dirty) => {
             setHasUnsavedReview(dirty);
-            onReviewDirtyChange(dirty);
           }}
           onBusyChange={setIsReviewBusy}
           onImport={onImport}
@@ -652,12 +775,8 @@ function isCaptureAction(current: CaptureCardAction | null, expected: CaptureCar
   );
 }
 
-function isCaptureDeletable(capture: CaptureResource): boolean {
+function isCaptureDeletable(capture: CaptureSummary): boolean {
   return captureStatus(capture.status).deletable;
-}
-
-function isActionableCapture(capture: CaptureResource): boolean {
-  return captureStatus(capture.status).actionable;
 }
 
 function CaptureIssue({ message }: { readonly message: string | null }): ReactElement {
@@ -684,7 +803,7 @@ function compactIssuePreview(message: string): string {
   return preview.length <= 180 ? preview : `${preview.slice(0, 177)}...`;
 }
 
-function captureStoragePath(capture: CaptureResource, locations: readonly LocationItem[]): string {
+function captureStoragePath(capture: CaptureSummary, locations: readonly LocationItem[]): string {
   return [
     capture.siteName,
     storageLocationLabel({

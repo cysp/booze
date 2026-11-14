@@ -6,12 +6,12 @@ import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { TopNav, TopNavHeading } from "@astryxdesign/core/TopNav";
-import { lazy, Suspense, useEffect, useMemo, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactElement } from "react";
 
 // oxlint-disable-next-line import/no-unassigned-import -- Vite loads the application stylesheet for its side effect.
 import "./App.css";
-import { InventoryArea } from "./InventoryView.tsx";
 import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
+import { useDebouncedQuery } from "./useDebouncedQuery.ts";
 import { useCatalogue } from "./useCatalogue.ts";
 import { useCatalogueUrlState } from "./useCatalogueUrlState.ts";
 import { useReturnFocus } from "./useReturnFocus.ts";
@@ -22,11 +22,9 @@ import {
   useSiteController,
 } from "./useCatalogueControllers.ts";
 import {
-  filterInventoryItems,
-  inventoryLocationOptions,
+  locationLabel,
   siteLabel,
   drinkLabel,
-  isDrinkQueueItem,
   type AuthMode,
   type InventoryItem,
 } from "./inventory-model.ts";
@@ -49,6 +47,11 @@ const drinkStatusOrder = [
   "past-window",
   "unknown",
 ] satisfies readonly InventoryItem["drinkStatus"][];
+
+const InventoryArea = lazy(async () => {
+  const module = await import("./InventoryView.tsx");
+  return { default: module.InventoryArea };
+});
 
 const BottleModal = lazy(async () => {
   const module = await import("./BottleModal.tsx");
@@ -99,21 +102,46 @@ export function App({ authMode }: AppProps): ReactElement {
   );
 }
 
-function uniqueSorted(values: readonly string[]): readonly string[] {
-  return [...new Set(values.filter((value) => value !== ""))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
 export function Catalogue({
   additionScope,
   authMode,
   authControl,
   getAuthHeaders,
 }: CatalogueProps): ReactElement {
+  return (
+    <CatalogueWorkspace
+      key={additionScope}
+      additionScope={additionScope}
+      authMode={authMode}
+      authControl={authControl}
+      getAuthHeaders={getAuthHeaders}
+    />
+  );
+}
+
+// oxlint-disable-next-line complexity -- The composition root wires area visibility, permissions, and modal lifecycles.
+function CatalogueWorkspace({
+  additionScope,
+  authMode,
+  authControl,
+  getAuthHeaders,
+}: CatalogueProps): ReactElement {
+  const urlState = useCatalogueUrlState();
+  const inventoryQuery = useDebouncedQuery(urlState.filter);
+  const [captureView, setCaptureView] = useState<"action" | "all">("action");
+  const inventoryParameters = new URLSearchParams({ limit: "50" });
+  if (inventoryQuery !== "") inventoryParameters.set("query", inventoryQuery);
+  if (urlState.siteIdFilter !== "") inventoryParameters.set("siteId", urlState.siteIdFilter);
+  if (urlState.storageLocationIdFilter !== "")
+    inventoryParameters.set("storageLocationId", urlState.storageLocationIdFilter);
+  if (urlState.varietalFilter !== "")
+    inventoryParameters.set("grapeVariety", urlState.varietalFilter);
+  if (urlState.drinkStatusFilter !== "")
+    inventoryParameters.set("drinkStatus", urlState.drinkStatusFilter);
   const {
     captures,
-    wines,
+    inventory,
+    capturePage,
     completeMutation,
     items,
     isLoading,
@@ -121,9 +149,15 @@ export function Catalogue({
     refreshIssues,
     retryRefresh,
     sites,
+    summary,
     status,
     setStatus,
-  } = useCatalogue(getAuthHeaders);
+    trackPendingCapture,
+  } = useCatalogue(getAuthHeaders, {
+    area: urlState.area,
+    inventoryPath: `/api/bottles?${inventoryParameters.toString()}`,
+    captureView,
+  });
   const writableSites = useMemo(
     () => sites.filter((site) => site.role === "owner" || site.role === "editor"),
     [sites],
@@ -151,7 +185,7 @@ export function Catalogue({
     setStorageLocationIdFilter,
     setSiteIdFilter,
     setVarietalFilter,
-  } = useCatalogueUrlState();
+  } = urlState;
   const bottleController = useBottleController({
     additionScope,
     completeMutation,
@@ -166,6 +200,7 @@ export function Catalogue({
     getAuthHeaders,
     setStatus,
     writableSites,
+    trackPendingCapture,
   });
   const locationController = useLocationController({
     completeMutation,
@@ -178,38 +213,21 @@ export function Catalogue({
     getAuthHeaders,
     setStatus,
   });
-  const drinkItems = useMemo(() => items.filter((item) => isDrinkQueueItem(item)), [items]);
   const isBottleDialogOpen =
     bottleController.isAddOpen ||
     (bottleController.editingBottle !== null && bottleController.editingForm !== null);
   const captureBottleDialogTrigger = useReturnFocus(isBottleDialogOpen, "#add-bottle-trigger");
 
-  const listedItems = useMemo(
-    () =>
-      filterInventoryItems(items, locations, {
-        filter,
-        varietalFilter,
-        storageLocationIdFilter,
-        siteIdFilter,
-        drinkStatusFilter,
-      }),
-    [
-      drinkStatusFilter,
-      filter,
-      items,
-      storageLocationIdFilter,
-      siteIdFilter,
-      locations,
-      varietalFilter,
-    ],
-  );
-  const varietalOptions = useMemo(
-    () => uniqueSorted(items.flatMap((item) => item.grapeVarieties)),
-    [items],
-  );
+  const varietalOptions = inventory.page?.facets.grapeVarieties ?? [];
   const locationOptions = useMemo(
-    () => inventoryLocationOptions(items, locations, sites),
-    [items, locations, sites],
+    () =>
+      locations
+        .filter((location) => siteIdFilter === "" || location.siteId === siteIdFilter)
+        .map((location) => ({
+          value: location.id,
+          label: `${siteLabel({ id: location.siteId, name: location.siteName }, sites)} / ${locationLabel(location, locations)}`,
+        })),
+    [locations, sites, siteIdFilter],
   );
   const siteOptions = useMemo(
     () => sites.map((site) => ({ label: siteLabel(site, sites), value: site.id })),
@@ -218,12 +236,12 @@ export function Catalogue({
   const drinkStatusOptions = useMemo(
     () =>
       drinkStatusOrder
-        .filter((value) => items.some((item) => item.drinkStatus === value))
+        .filter((value) => inventory.page?.facets.drinkStatuses.includes(value) === true)
         .map((value) => ({
           label: drinkLabel(value),
           value,
         })),
-    [items],
+    [inventory.page?.facets.drinkStatuses],
   );
 
   return (
@@ -262,15 +280,15 @@ export function Catalogue({
             <dl>
               <div>
                 <dt>Bottles</dt>
-                <dd>{items.length}</dd>
+                <dd>{summary.inStockBottleCount}</dd>
               </div>
               <div>
                 <dt>Drink queue</dt>
-                <dd>{drinkItems.length}</dd>
+                <dd>{summary.drinkQueueBottleCount}</dd>
               </div>
               <div>
                 <dt>Captures</dt>
-                <dd>{captures.filter((capture) => capture.status !== "imported").length}</dd>
+                <dd>{summary.captures.actionable + summary.captures.processing}</dd>
               </div>
             </dl>
           </section>
@@ -320,7 +338,11 @@ export function Catalogue({
                 drinkStatusOptions={drinkStatusOptions}
                 filter={filter}
                 grouping={grouping}
-                items={listedItems}
+                items={items}
+                totalCount={inventory.page?.totalCount ?? 0}
+                hasMore={inventory.page?.nextPageToken !== null && inventory.page !== null}
+                isLoadingMore={inventory.isRefreshing}
+                onLoadMore={inventory.loadMore}
                 isLoading={isLoading}
                 onCreateSite={
                   sites.length === 0 && refreshIssues.length === 0
@@ -349,13 +371,21 @@ export function Catalogue({
                 }}
                 onEditBottle={(item) => {
                   captureBottleDialogTrigger();
-                  bottleController.openBottleEditor(item);
+                  void bottleController.openBottleEditor(item);
                 }}
               />
             ) : area === "captures" ? (
               <CaptureArea
                 captures={captures}
-                wines={wines}
+                counts={capturePage.page?.counts ?? summary.captures}
+                totalCount={capturePage.page?.totalCount ?? 0}
+                hasMore={capturePage.page?.nextPageToken !== null && capturePage.page !== null}
+                isLoading={capturePage.isLoading}
+                isLoadingMore={capturePage.isRefreshing}
+                onLoadMore={capturePage.loadMore}
+                view={captureView}
+                onViewChange={setCaptureView}
+                getAuthHeaders={getAuthHeaders}
                 form={captureController.captureForm}
                 isSaving={captureController.isSaving}
                 locations={writableLocations}
@@ -385,7 +415,7 @@ export function Catalogue({
 
             {bottleController.isAddOpen ? (
               <BottleModal
-                wines={wines}
+                getAuthHeaders={getAuthHeaders}
                 form={bottleController.addFormDefaults}
                 isSaving={bottleController.isSaving}
                 locations={writableLocations}
@@ -399,7 +429,7 @@ export function Catalogue({
             {bottleController.editingBottle === null ||
             bottleController.editingForm === null ? null : (
               <BottleModal
-                wines={wines}
+                getAuthHeaders={getAuthHeaders}
                 key={bottleController.editingBottle.id}
                 form={bottleController.editingForm}
                 isSaving={bottleController.isSaving}

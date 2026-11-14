@@ -3,6 +3,9 @@ import type {
   SiteResource,
   StorageLocationResource,
 } from "../shared/catalogue-resources.ts";
+import { calculateDrinkStatus, type DrinkStatus } from "../shared/drink-status.ts";
+export type { DrinkStatus } from "../shared/drink-status.ts";
+import type { BottleSummary } from "../shared/inventory-queries.ts";
 import type { VintageStatus } from "../shared/wine-identity.ts";
 import { validateBottleQuantity } from "../shared/quantity.ts";
 
@@ -30,8 +33,8 @@ export type CaptureFormState = {
   quantity: string;
 };
 
-export type DrinkStatus = "drink-now" | "drink-soon" | "hold" | "past-window" | "unknown";
 export type InventoryItem = BottleResource & { readonly drinkStatus: DrinkStatus };
+export type InventorySummaryItem = BottleSummary & { readonly drinkStatus: DrinkStatus };
 export type LocationItem = StorageLocationResource;
 export type SiteItem = SiteResource;
 
@@ -238,11 +241,11 @@ export function parseQuantity(value: string): number {
   return result.value;
 }
 
-export function wineDisplayBrand(item: InventoryItem): string {
+export function wineDisplayBrand(item: InventorySummaryItem): string {
   return item.wineryName;
 }
 
-export function bottleTitle(item: InventoryItem): string {
+export function bottleTitle(item: InventorySummaryItem): string {
   return [item.vintageLabel, item.displayName].filter((value) => value !== "").join(" ");
 }
 
@@ -289,7 +292,7 @@ export function storageLocationLabel({
 }
 
 export function storageLocationPath(
-  item: InventoryItem,
+  item: InventorySummaryItem,
   locations: readonly LocationItem[] = [],
 ): string {
   return storageLocationLabel({
@@ -299,7 +302,10 @@ export function storageLocationPath(
   });
 }
 
-export function storagePath(item: InventoryItem, locations: readonly LocationItem[] = []): string {
+export function storagePath(
+  item: InventorySummaryItem,
+  locations: readonly LocationItem[] = [],
+): string {
   return [item.siteName, storageLocationPath(item, locations), item.positionHint]
     .filter((value) => value !== null && value !== "")
     .join(" / ");
@@ -310,7 +316,7 @@ function normaliseDisplayText(value: string): string {
 }
 
 export function bottleSubtitle(
-  item: InventoryItem,
+  item: InventorySummaryItem,
   locations: readonly LocationItem[] = [],
 ): string {
   const brandName = item.brandName?.trim();
@@ -323,73 +329,27 @@ export function bottleSubtitle(
   return [wineryLabel, storagePath(item, locations)].filter((value) => value !== "").join(" - ");
 }
 
-export function wineOrigin(item: InventoryItem): string {
+export function wineOrigin(item: InventorySummaryItem): string {
   return [item.appellation, item.region, item.country]
     .filter((value) => value !== null && value !== "")
     .join(" / ");
 }
 
-export function grapeSummary(item: InventoryItem): string {
+export function grapeSummary(item: InventorySummaryItem): string {
   return item.grapeVarieties.length === 0 ? "Grapes not set" : item.grapeVarieties.join(", ");
 }
 
-export function bottleFacts(item: InventoryItem): string {
+export function bottleFacts(item: InventorySummaryItem): string {
   return [item.alcoholPercent === null ? null : `${item.alcoholPercent}%`, `${item.volumeMl}ml`]
     .filter((value) => value !== null && value !== "")
     .join(" / ");
 }
 
-export function drinkWindow(item: InventoryItem): string {
+export function drinkWindow(item: InventorySummaryItem): string {
   if (item.drinkFromYear === null && item.drinkToYear === null) {
     return "No window";
   }
   return `${item.drinkFromYear ?? "?"}-${item.drinkToYear ?? "?"}`;
-}
-
-export function criticReviewSummary(item: InventoryItem): string {
-  return item.criticReviews
-    .map((review) => `${review.reviewSourceName}: ${review.ratingText}`)
-    .join(" / ");
-}
-
-export function awardSummary(item: InventoryItem): string {
-  return item.awards
-    .map((award) =>
-      [
-        award.awardLevel,
-        award.awardYear === null ? null : award.awardYear.toString(),
-        award.awardName,
-      ]
-        .filter((value) => value !== null && value !== "")
-        .join(" - "),
-    )
-    .join(" / ");
-}
-
-function calculateDrinkStatus({
-  drinkFromYear,
-  drinkToYear,
-  now = new Date(),
-}: {
-  readonly drinkFromYear: number | null;
-  readonly drinkToYear: number | null;
-  readonly now?: Date;
-}): InventoryItem["drinkStatus"] {
-  if (drinkFromYear === null && drinkToYear === null) {
-    return "unknown";
-  }
-
-  const currentYear = now.getUTCFullYear();
-  if (drinkToYear !== null && currentYear > drinkToYear) {
-    return "past-window";
-  }
-  if (drinkFromYear !== null && currentYear < drinkFromYear) {
-    return "hold";
-  }
-  if (drinkToYear !== null && drinkToYear - currentYear <= 2) {
-    return "drink-soon";
-  }
-  return "drink-now";
 }
 
 export function drinkLabel(status: InventoryItem["drinkStatus"]): string {
@@ -456,12 +416,8 @@ export function formStateForItem(item: InventoryItem): FormState {
   };
 }
 
-export function isDrinkQueueItem(item: InventoryItem): boolean {
-  return (
-    item.drinkStatus === "drink-now" ||
-    item.drinkStatus === "drink-soon" ||
-    item.drinkStatus === "past-window"
-  );
+export function inventorySummaryItem(resource: BottleSummary): InventorySummaryItem {
+  return { ...resource, drinkStatus: calculateDrinkStatus(resource) };
 }
 
 export function inventoryItem(resource: BottleResource): InventoryItem {
@@ -487,80 +443,4 @@ export function locationLabel(location: LocationItem, locations: readonly Locati
   )
     ? `${path} (${location.id})`
     : path;
-}
-
-export function inventoryLocationOptions(
-  items: readonly InventoryItem[],
-  locations: readonly LocationItem[],
-  sites: readonly SiteItem[],
-): readonly { readonly label: string; readonly value: string }[] {
-  const byId = new Map<string, InventoryItem>();
-  for (const item of items) {
-    if (item.storageLocationId !== null) byId.set(item.storageLocationId, item);
-  }
-  return [...byId]
-    .map(([value, item]) => {
-      const site = sites.find((candidate) => candidate.id === item.siteId) ?? {
-        id: item.siteId,
-        name: item.siteName,
-      };
-      const location = locations.find((candidate) => candidate.id === value);
-      return {
-        value,
-        label: `${siteLabel(site, sites)} / ${location === undefined ? (item.storageLocationName ?? value) : locationLabel(location, locations)}`,
-      };
-    })
-    .toSorted((left, right) => left.label.localeCompare(right.label));
-}
-
-export function filterInventoryItems(
-  items: readonly InventoryItem[],
-  locations: readonly LocationItem[],
-  filters: {
-    readonly filter: string;
-    readonly varietalFilter: string;
-    readonly storageLocationIdFilter: string;
-    readonly siteIdFilter: string;
-    readonly drinkStatusFilter: string;
-  },
-): readonly InventoryItem[] {
-  const needle = filters.filter.trim().toLowerCase();
-  return items.filter(
-    (item) =>
-      (filters.siteIdFilter === "" || item.siteId === filters.siteIdFilter) &&
-      (filters.storageLocationIdFilter === "" ||
-        item.storageLocationId === filters.storageLocationIdFilter) &&
-      (filters.varietalFilter === "" || item.grapeVarieties.includes(filters.varietalFilter)) &&
-      (filters.drinkStatusFilter === "" || item.drinkStatus === filters.drinkStatusFilter) &&
-      (needle === "" ||
-        [
-          item.siteName,
-          storageLocationPath(item, locations),
-          item.positionHint,
-          item.wineryName,
-          item.brandName,
-          item.displayName,
-          item.vintageLabel,
-          item.vintageYear,
-          ...item.grapeVarieties,
-          item.country,
-          item.region,
-          item.appellation,
-          item.classification,
-          item.wineType,
-          item.wineColor,
-          item.alcoholPercent,
-          item.volumeMl,
-          item.addressQualification,
-          item.barcode,
-          item.lotCode,
-          item.description,
-          item.drinkingAdvice,
-          item.labelText,
-          item.wineNotes,
-          item.bottleNotes,
-          criticReviewSummary(item),
-          awardSummary(item),
-        ].some((value) => value !== null && String(value).toLowerCase().includes(needle))),
-  );
 }
