@@ -11,6 +11,7 @@ function setup(hooks: Parameters<typeof multipartBucket>[0] = {}) {
   sqlite.exec(
     "INSERT INTO users(id,clerk_user_id) VALUES('user','user'); INSERT INTO sites(id,name) VALUES('site','Site'); INSERT INTO site_memberships(site_id,user_id,role) VALUES ('site','user','owner')",
   );
+  sqlite.exec("INSERT INTO site_memberships(site_id,user_id,role) VALUES('site','user','owner')");
   const storage = multipartBucket(hooks);
   const d1 = asD1(sqlite);
   const input = {

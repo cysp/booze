@@ -10,7 +10,6 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import {
   additionFingerprint,
   additionOperationIdSchema,
   contentDigest,
@@ -150,7 +149,8 @@ export async function createBottleCapture(
   try {
     for (const [sortOrder, file] of files.entries())
       await saveOriginal({ bucket, database, captureId, sortOrder, file });
-    // Only the request that transitions intake to queued launches extraction.
+    // Queued and its persisted owner are a durable launch intent. Receipt
+    // replays and scheduled maintenance can finish the handoff independently.
     const [finished] = await database
       .update(bottleCaptures)
       .set({

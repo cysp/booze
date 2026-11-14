@@ -101,7 +101,7 @@ The app must support:
 1. entering one or more bottles;
 2. storing wine metadata and notes;
 3. storing label text manually;
-4. selecting or typing a site and location;
+4. selecting a site and optional location by their stored IDs;
 5. moving a bottle to another known location;
 6. marking a bottle consumed;
 7. searching available inventory;
@@ -110,6 +110,20 @@ The app must support:
 The drinking window is edited as one fact: both endpoints are submitted together, with `null` for an unknown endpoint. The browser still presents separate Drink from and Drink to fields. REST bottle PATCH callers must send both fields when changing either one; MCP already uses this contract. Concurrent edits replace the complete window, and the last committed edit wins. Adding bottles can supply a window only when both stored endpoints are unknown; it cannot combine endpoints from different records.
 
 Changing a bottle's wine identity can reuse an existing wine vintage or create a new one. Reusing an existing vintage preserves its grape blend. A new vintage can inherit the original wine's constituent measurements; the original vintage's reviews and awards remain attached to it unless explicitly edited.
+
+Adding bottles or submitting photos requires an operation ID and an explicit site ID. Repeating the same operation returns its original result; changing its content under the same ID conflicts. The receipt and catalogue writes commit together. A lost acknowledgement must not create additional stock, and deleting the result must not make replay recreate it.
+
+HTTP and MCP bottle, location, wine-window, and critic-review operations share complete domain operations. Their permission guard, mutation, and audit facts commit in one batch. Audit snapshots describe the state at that commit, rather than a later resource read. An unchanged request reports a successful no-op with no invented mutation.
+
+Resource representations keep stored IDs, numeric values, and array elements intact. New-entry validation is separate from reading historical values: an old value outside today's entry limits remains visible for deliberate correction. Neither renaming a site or location nor punctuation within a grape name changes its identity.
+
+## Catalogue Reads
+
+Inventory, wine choices, and captures use server pages with a default limit of 50 and a maximum of 100. Cursors use immutable creation time and stored ID, remain tied to the caller and filters, and are opaque to clients. Inventory pages return summaries, full matching counts, and facets; bottle and wine details load by authorized ID. Wine choices include records with no bottles. Sites and storage locations remain shared lightweight directories.
+
+The browser requests the active area's pages and loads more only on demand. Group counts describe bottles shown, not an assumed complete group. Free-text search runs over stored wine, bottle, location, review, and award facts, including fields omitted from summaries. Search treats `%`, `_`, and quotes literally; SQLite folds ASCII case, while other Unicode text requires matching case.
+
+`GET /api/bottles` defaults to `status=in_stock`; `consumed` and `any` are explicit alternatives. `GET /api/bottle-captures` defaults to the action view, which includes processing and review work but excludes imported captures. Compact status reads track known captures independently of the current page. A missing tracked capture can invalidate inventory without being presented as a successful import.
 
 ## Location Management
 
@@ -153,45 +167,35 @@ The current drink queue displays `drink-now`, `drink-soon`, and `past-window` bo
 
 ## Image and Enrichment Requirements
 
-The current capture workflow accepts multiple bottle images, stores originals and thumbnails in R2, runs asynchronous extraction, and sends uncertain results through a human-review gate. Original images remain available for the lifetime of the capture and are removed only through explicit capture or site deletion.
+Photo capture accepts multiple images, stores originals in R2, and runs asynchronous extraction to prepare a draft. Every capture requires deliberate human confirmation before adding stock. Confidence is evidence for review and never authorizes a catalogue write. Manual entry remains available without extraction services.
+
+One configured extractor supplies label text, field evidence, warnings, and a normalized candidate. The original response and run configuration remain in the extraction artifact. The model's accuracy is not established by schema validation; unsupported or ambiguous measurements must remain reviewable rather than becoming guessed numbers.
+
+New originals belong to their capture and use immutable object keys. Duplicate bytes do not create shared ownership between new captures. Preview transformations happen on read; historical shared assets and stored thumbnails remain valid. Originals remain available for the capture's lifetime and are removed only through explicit capture or site deletion.
 
 Image processing must:
 
 1. store photos in R2, not D1;
 2. keep R2 artifacts retryable and D1 as the source of truth;
-3. preserve uncertain candidates for authorised manual review;
-4. durably queue object deletion and retry failed R2 cleanup.
+3. retain candidates and evidence for authorised manual review;
+4. durably reserve upload ownership before writing bytes;
+5. durably queue object deletion, abort unfinished multipart uploads before deleting their keys, and retry failed cleanup.
 
-If photos are saved but extraction cannot start, retain the capture and photos, explain the saved result and startup failure, and offer Retry and Delete. An uncertain launch acknowledgement must not downgrade processing that already started. Automatic reconciliation of ambiguous or abruptly interrupted operations remains a follow-up.
+If photos are saved but extraction startup is unconfirmed, retain the queued capture and its launch identity. Submission replay, explicit retry, and bounded scheduled dispatch use that same identity. An uncertain acknowledgement must not downgrade started processing or allocate a competing run. The current Workflow owner and latest run fence finalization; saved review revisions fence confirmation. Historical partial imports are not inferred or rewritten by this lifecycle.
+
+Reviewed stock, locations, and the import receipt commit together. Saving a draft does not add stock. Unresolved label measurements cannot be dismissed by saving an unrelated note; selecting an existing wine preserves that wine's facts but still requires valid physical bottle facts. When a label supplies no size, the review must make the 750 mL default explicit before confirmation.
 
 Trusted wine enrichment from winery pages, technical sheets, Vivino pages, or reviews is desirable but not required for MVP. Any enrichment must preserve source URLs and should not overwrite user-entered facts without review.
 
 ## MCP Requirements
 
-MCP is a stretch requirement. The `/mcp` endpoint may expose read and write tools for authenticated users, starting with inventory lookup and bounded cellar-management operations such as:
-
-```text
-wine.search_bottles
-wine.list_sites
-wine.list_wines
-wine.get_wine
-wine.list_wineries
-wine.list_storage_locations
-wine.get_bottle
-wine.list_drink_queue
-wine.get_location_inventory
-wine.get_inventory_summary
-wine.set_drinking_window
-wine.create_storage_location
-wine.set_bottle_location
-wine.mark_bottle_consumed
-```
+The `/mcp` endpoint exposes `cellar.*` inventory and management tools. The [server tool definitions](../apps/web/worker/mcp/server.ts) are authoritative for the available surface. Tools return the exact stored IDs used by HTTP; clients must use those IDs rather than derive aliases from names.
 
 MCP tools must authenticate callers, enforce site membership, return structured JSON, avoid arbitrary SQL, and keep each write scoped to an explicit domain action. Write tools should expose narrow inputs, validate ownership before mutation, report the affected records, and persist audit context to investigate accidental or agent-triggered changes.
 
-The Clerk OAuth application supports Clerk's built-in `email`, `offline_access`, `openid`, and `profile` scopes. Clerk does not currently support custom resource scopes, so MCP read and write authorisation is enforced by valid Clerk OAuth identity plus server-side site membership and domain-action checks. Audit event identifiers stay server-private and are not exposed in tool results.
+MCP read and write authorisation requires valid Clerk OAuth identity plus server-side site membership and domain-action checks. Audit event identifiers stay server-private and are not exposed in tool results. Mutation results return committed before/after facts and affected-record counts.
 
-The primary MCP client is up-to-date ChatGPT. Tool results should treat `structuredContent` as the canonical data channel and keep textual content terse instead of duplicating serialized JSON, because duplicated text risks response-size caps. Alternatives considered and rejected for the current product shape are capped JSON text, detail-only list responses, resource links for large payloads, and compressed/base64 payloads.
+The primary MCP client is ChatGPT. Tool results treat `structuredContent` as the canonical data channel and keep textual content terse instead of duplicating serialized JSON.
 
 ## Non-Functional Requirements
 
@@ -205,7 +209,7 @@ The app should be comfortable on a mobile browser:
 4. inventory and drink views avoid accidental edit fields except deliberate move/consume controls;
 5. desktop layouts use available width without changing the underlying workflows.
 
-Inventory, locations, sites, and captures refresh independently. Each failed section keeps its warning and retry action until a current refresh of that section succeeds. A committed mutation is reported as saved even when reloading its data fails; older refreshes must not overwrite newer operation feedback.
+Active pages, details, and shared directories own their refreshes. Each failed section keeps its warning and retry action until a current refresh succeeds. A committed mutation is reported as saved even when reloading its data fails; older requests must not overwrite newer queries, actors, drafts, or operation feedback.
 
 ## Security
 
@@ -227,28 +231,7 @@ The system should:
 4. make future CSV export/import possible;
 5. treat AI indexes and OCR output as rebuildable derived data.
 
-## Implementation Plan
-
-### Done
-
-1. Worker/Vite/React application shell.
-2. D1 schema for users, site memberships, sites, wineries, collapsed wine vintages, constituents, bottles, and storage locations.
-3. Clerk token verification plus localhost development auth.
-4. Resource-oriented REST routes for bottles, sites, storage locations, and label extractions.
-5. Mobile-first responsive UI with bottle and storage-location areas.
-6. Basic drink-window status calculation.
-7. R2-backed bottle captures with multi-model extraction and a human-review gate.
-8. Audited MCP read and write tools.
-9. Owner/editor/viewer enforcement in the Worker.
-
-### Next
-
-1. Add export and rehearse recovery of catalogue records and original images.
-2. Add consumed-history browsing and a deliberate restore operation.
-3. Add a complete read-only bottle-details view.
-4. Add member invitation and role-management workflows.
-5. Add capture-retention controls and operational visibility for R2 cleanup retries.
-6. Expand hosted MCP/OAuth and Workflow restart verification using a dedicated test site.
+Current capabilities and remaining work are maintained in [implementation status](status.md). Detailed capture boundaries are documented in the [workflow rationale](bottle-capture-workflow-rationale.md).
 
 ## Success Criteria
 

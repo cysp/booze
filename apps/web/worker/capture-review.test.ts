@@ -7,7 +7,6 @@ import { z } from "zod";
 import { problemResponseForError } from "./api/http.ts";
 import { userIdForClerkUser } from "./api/ids.ts";
 import type { Bindings } from "./api/types.ts";
-import { importBottleCandidate, matchBottleCandidate } from "./bottle-importer.ts";
 import { reserveCaptureRetry } from "./capture-store.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
@@ -292,10 +291,10 @@ await describe("capture review corrections", async () => {
         captureId: "capture",
         database,
         workflowInstanceId: "retry",
-        siteId: "site",
-        userId: userIdForClerkUser("dev:tester"),
         expectedWorkflowInstanceId: null,
         expectedReviewRevision: 1,
+        siteId: "site",
+        userId: userIdForClerkUser("dev:tester"),
       }),
       true,
     );
@@ -344,49 +343,26 @@ await describe("capture review corrections", async () => {
   });
 
   await it("requires explicit import after saved corrections even after extraction is retried", async () => {
-    const { sqlite, database, request } = setup();
+    const { sqlite, request } = setup();
     await request("PATCH", "/review", { expectedRevision: 0, candidate });
     sqlite.exec("UPDATE bottle_captures SET status = 'extracting'");
-    const result = await importBottleCandidate({
-      database,
-      captureId: "capture",
-      runId: "run",
-      siteId: "site",
-      quantity: 2,
-      candidate: {
-        wine: { wineryName: "Producer", designation: "Reserve" },
-        bottle: {},
-        rawSuggestion: {},
-      },
-    });
-    assert.equal(result.kind, "needs_review");
+    const response = await request("POST", "/import", { expectedReviewRevision: 1 });
+    assert.equal(response.status, 409);
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
   });
 
-  await it("offers an existing producer/vintage as a possible match, never automatic reuse", async () => {
-    const { sqlite, database } = setup();
+  await it("never selects a plausible existing wine without a deliberate wine ID", async () => {
+    const { sqlite, request } = setup();
     sqlite.exec(`INSERT INTO wineries (id, site_id, name) VALUES ('winery', 'site', 'RIKARD Wines');
       INSERT INTO wine_vintages (id, site_id, winery_id, base_name, display_name, vintage_year, vintage_status, vintage_label)
       VALUES ('wine', 'site', 'winery', 'Black Label', 'Black Label Shiraz', 2022, 'year', '2022');`);
-    const result = await matchBottleCandidate({
-      database,
-      siteId: "site",
-      candidate: {
-        wine: {
-          wineryName: "RIKARD Wines",
-          designation: "",
-          grapeVarieties: ["Shiraz"],
-          vintageYear: 2022,
-        },
-        bottle: {},
-        rawSuggestion: {},
-      },
-    });
-    assert.equal(result.kind, "needs_review");
-    assert.deepEqual(
-      result.wineVintageCandidates.map((wine) => wine.id),
-      ["wine"],
+    const imported = await request("POST", "/import", {});
+    assert.equal(imported.status, 200, await imported.clone().text());
+    assert.notEqual(
+      sqlite.prepare("SELECT wine_vintage_id FROM bottles LIMIT 1").get()?.["wine_vintage_id"],
+      "wine",
     );
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"], 2);
   });
 
   await it("creates a distinct wine when explicitly choosing new despite identical descriptions", async () => {
@@ -456,23 +432,22 @@ await describe("capture review corrections", async () => {
     );
   });
 
-  await it("recognizes an existing brand without inventing a producer", async () => {
-    const { sqlite, database } = setup();
+  await it("reuses an explicitly selected brand without inventing a producer", async () => {
+    const { sqlite, request } = setup();
     sqlite.exec(`INSERT INTO wine_vintages (id, site_id, brand_name, base_name, display_name, vintage_label)
       VALUES ('wine', 'site', 'RIKARD', '', 'RIKARD Shiraz', 'Unknown');`);
-    const result = await matchBottleCandidate({
-      database,
-      siteId: "site",
-      candidate: {
-        wine: { wineryName: "", brandName: "RIKARD", grapeVarieties: ["Shiraz"] },
-        bottle: {},
-        rawSuggestion: {},
-      },
-    });
-    assert.equal(result.kind, "needs_review");
-    assert.deepEqual(
-      result.wineVintageCandidates.map((wine) => wine.id),
-      ["wine"],
+    const imported = await request("POST", "/import", { wineVintageId: "wine" });
+    assert.equal(imported.status, 200, await imported.clone().text());
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM wineries").get()?.["count"], 0);
+    assert.equal(
+      sqlite.prepare("SELECT winery_id FROM wine_vintages WHERE id='wine'").get()?.["winery_id"],
+      null,
+    );
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM bottles WHERE wine_vintage_id='wine'").get()?.[
+        "count"
+      ],
+      2,
     );
   });
 

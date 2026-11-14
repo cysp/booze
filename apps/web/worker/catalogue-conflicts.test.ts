@@ -10,7 +10,7 @@ import { retryCatalogueTransaction } from "./api/catalogue-transaction.ts";
 import { problemResponseForError } from "./api/http.ts";
 import { userIdForClerkUser } from "./api/ids.ts";
 import type { Bindings } from "./api/types.ts";
-import { importBottleCandidate } from "./bottle-importer.ts";
+import { importReviewedCapture } from "./bottle-importer.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
@@ -23,6 +23,30 @@ const app = new Hono<{ Bindings: Bindings }>()
   .onError(problemResponseForError);
 
 await describe("catalogue preparation conflicts", async () => {
+  await it("aborts deliberate stock confirmation when write permission is revoked during preparation", async () => {
+    const sqlite = setup();
+    insertCapture(sqlite, "needs_review");
+    const { d1 } = interleavedDatabase(sqlite, () => {
+      sqlite.exec("UPDATE site_memberships SET role='viewer'");
+    });
+    await assert.rejects(
+      importReviewedCapture(reviewedImportInput(d1)),
+      (error: unknown) => error instanceof Error && "status" in error && error.status === 403,
+    );
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"], 0);
+    assert.equal(
+      sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"],
+      "needs_review",
+    );
+    assert.equal(
+      sqlite.prepare("SELECT import_result_json FROM bottle_capture_runs").get()?.[
+        "import_result_json"
+      ],
+      null,
+    );
+  });
+
   await it("keeps a bottle addition distinct from a concurrent wine with the same description", async () => {
     const sqlite = setup();
     const { d1, batchCount } = interleavedDatabase(sqlite, (attempt) => {
@@ -77,15 +101,15 @@ await describe("catalogue preparation conflicts", async () => {
     assertCommittedImport(sqlite, importedId);
   });
 
-  await it("resumes an automatic claim after a concurrent winery natural-key conflict", async () => {
+  await it("retries deliberate confirmation after a concurrent winery natural-key conflict", async () => {
     const sqlite = setup();
     sqlite.exec("DELETE FROM wineries");
-    insertCapture(sqlite, "extracting");
+    insertCapture(sqlite, "needs_review");
     const { d1, batchCount } = interleavedDatabase(sqlite, (attempt) => {
       if (attempt === 1) insertWinningWinery(sqlite, "winning-winery");
     });
-    const imported = await importBottleCandidate({
-      ...automaticImportInput(d1),
+    const imported = await importReviewedCapture({
+      ...reviewedImportInput(d1),
       candidate: regionalCandidate(),
     });
     assert.equal(imported.kind, "imported");
@@ -149,7 +173,7 @@ await describe("catalogue preparation conflicts", async () => {
 
   await it("does not retry an uncertain commit and replays its persisted import receipt", async () => {
     const sqlite = setup();
-    insertCapture(sqlite, "extracting");
+    insertCapture(sqlite, "needs_review");
     const d1 = asD1(sqlite);
     const batch = d1.batch.bind(d1);
     let batchCount = 0;
@@ -158,10 +182,11 @@ await describe("catalogue preparation conflicts", async () => {
       await batch(statements);
       throw new Error("Response lost after commit");
     };
-    const input = automaticImportInput(d1);
-    await assert.rejects(importBottleCandidate(input), /Response lost after commit/u);
+    const input = reviewedImportInput(d1);
+    const imported = await importReviewedCapture(input);
+    assert.equal(imported.kind, "imported");
     assert.equal(batchCount, 1);
-    const replayed = await importBottleCandidate(input);
+    const replayed = await importReviewedCapture(input);
     assert.equal(replayed.kind, "imported");
     assert.equal(batchCount, 1);
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 2);
@@ -284,7 +309,7 @@ async function request(database: D1Database, path: string, payload: Record<strin
   );
 }
 
-function automaticImportInput(database: D1Database) {
+function reviewedImportInput(database: D1Database) {
   return {
     candidate,
     captureId: "capture",
@@ -295,6 +320,8 @@ function automaticImportInput(database: D1Database) {
     positionHint: null,
     runId: "run",
     workflowInstanceId: "workflow",
+    userId: userIdForClerkUser("dev:tester"),
+    expectedReviewRevision: 0,
   };
 }
 

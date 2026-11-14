@@ -6,18 +6,11 @@ import {
 } from "../shared/catalogue-inputs.ts";
 import {
   BottleOcrError,
-  combineBottleLabelEvidence,
-  defaultBottleCombinerConfig,
-  defaultBottleExtractorConfigs,
-  extractBottleLabelEvidenceWithExtractor,
-  suggestionFromBottleCombination,
-  type BottleCombinedExtraction,
-  type BottleExtractorConfig,
+  extractBottleLabelEvidence,
   type BottleExtractorResult,
-  type BottleExtractorsResult,
+  type BottleExtractorStepResult,
   type BottleOcrImageContent,
   type BottleOcrDiagnostic,
-  type BottleOcrSuggestion,
 } from "./bottle-ocr.ts";
 import type { CaptureWorkflowRecord } from "./capture-store.ts";
 
@@ -28,35 +21,14 @@ export type ImportCandidate = {
   readonly validationIssues?: readonly CandidateValidationIssue[] | undefined;
 };
 
-export type CaptureImportReviewDecision =
-  | {
-      readonly kind: "auto_import";
-      readonly reasons: readonly [];
-    }
-  | {
-      readonly kind: "needs_review";
-      readonly reason: "ocr_human_review_required";
-      readonly reasons: readonly string[];
-    };
-
-export type CaptureExtractorResult = {
+export type CaptureExtractorResult = BottleExtractorStepResult & {
   readonly diagnostics: readonly BottleOcrDiagnostic[];
-  readonly extractorId: string;
-  readonly model: string;
-  readonly result: BottleExtractorResult;
-};
-
-export type CaptureReconciliationResult = {
-  readonly combined: BottleCombinedExtraction;
-  readonly diagnostics: readonly BottleOcrDiagnostic[];
-  readonly model: string;
 };
 
 export async function extractCaptureLabelEvidence({
   bucket,
   capture,
   diagnostics,
-  extractor,
   gatewayToken,
   gatewayUrl,
   images,
@@ -64,149 +36,119 @@ export async function extractCaptureLabelEvidence({
   readonly bucket: R2Bucket;
   readonly capture: CaptureWorkflowRecord;
   readonly diagnostics?: BottleOcrDiagnostic[] | undefined;
-  readonly extractor: BottleExtractorConfig;
   readonly gatewayToken: string | undefined;
   readonly gatewayUrl: string | undefined;
   readonly images?: ImagesBinding | undefined;
-}): Promise<Omit<CaptureExtractorResult, "diagnostics">> {
-  const extracted = await extractBottleLabelEvidenceWithExtractor({
+}): Promise<BottleExtractorStepResult> {
+  return extractBottleLabelEvidence({
     diagnostics,
-    extractor,
     gatewayToken,
     ...(gatewayUrl === undefined ? {} : { gatewayUrl }),
     imageContent: await captureImageContent({ bucket, capture, images }),
   });
-  return {
-    extractorId: extracted.extractorId,
-    model: extracted.model,
-    result: extracted.result,
-  };
-}
-
-export async function reconcileCaptureLabelEvidence({
-  diagnostics,
-  extractors,
-  gatewayToken,
-  gatewayUrl,
-}: {
-  readonly diagnostics?: BottleOcrDiagnostic[] | undefined;
-  readonly extractors: BottleExtractorsResult;
-  readonly gatewayToken: string | undefined;
-  readonly gatewayUrl: string | undefined;
-}): Promise<Omit<CaptureReconciliationResult, "diagnostics">> {
-  const combiner = defaultBottleCombinerConfig({
-    gatewayToken,
-    ...(gatewayUrl === undefined ? {} : { gatewayUrl }),
-  });
-  return {
-    combined: await combineBottleLabelEvidence({
-      combiner,
-      diagnostics,
-      extractors,
-    }),
-    model: combiner.model,
-  };
-}
-
-export function extractorsFromCaptureResults(
-  results: readonly Pick<CaptureExtractorResult, "extractorId" | "result">[],
-): BottleExtractorsResult {
-  return Object.fromEntries(results.map((result) => [result.extractorId, result.result]));
 }
 
 export function buildCaptureImportCandidate({
-  combined,
-  extractors,
+  extraction,
 }: {
-  readonly combined: BottleCombinedExtraction;
-  readonly extractors: BottleExtractorsResult;
-}): {
-  readonly candidate: ImportCandidate;
-  readonly imageText: unknown;
-  readonly model: string;
-  readonly reviewDecision: CaptureImportReviewDecision;
-} {
-  const suggestion = suggestionFromBottleCombination({ combined, extractors });
-  const candidate = candidateFromSuggestion(suggestion, combined.canonical_fields.vintage.value);
-  const decision = decideCaptureImport({ combined, extractors });
-  const reasons = [
-    ...decision.reasons,
+  readonly extraction: Pick<CaptureExtractorResult, "extractorId" | "model" | "result">;
+}): { readonly candidate: ImportCandidate; readonly reviewReasons: readonly string[] } {
+  const { result } = extraction;
+  const fields = result.fields;
+  const validationIssues: CandidateValidationIssue[] = [];
+  const vintageLabel = fields.vintage.value;
+  const vintageYear = normalizedNumber(
+    vintageLabel,
+    "wine.vintageYear",
+    validationIssues,
+    parseYear,
+  );
+  const displayName = text(fields.displayName.value);
+  const candidate = validateNormalizedCandidate(
+    {
+      wine: {
+        wineryName: text(fields.wineryName.value),
+        brandName: text(fields.brandName.value) || undefined,
+        baseName: displayName,
+        designation: displayName,
+        displayName,
+        vintageYear,
+        vintageStatus:
+          vintageYear === undefined
+            ? isNonVintage(vintageLabel)
+              ? "non_vintage"
+              : "unknown"
+            : "year",
+        // The model returns a structured list. Punctuation can be part of a grape name.
+        grapeVarieties: fields.grapeVarieties.value.map((value) => value.trim()).filter(Boolean),
+        country: text(fields.country.value),
+        region: text(fields.region.value),
+        appellation: text(fields.appellation.value),
+        classification: text(fields.classification.value),
+        wineType: text(fields.wineType.value),
+        wineColor: text(fields.wineColor.value),
+        addressQualification: text(fields.addressQualification.value),
+        alcoholPercent: normalizedNumber(
+          fields.alcoholPercent.value,
+          "wine.alcoholPercent",
+          validationIssues,
+          parseAlcoholPercent,
+        ),
+        description: text(fields.description.value),
+        drinkingAdvice: text(fields.drinkingAdvice.value),
+        labelText: labelText(result),
+        notes: "",
+      },
+      bottle: {
+        volumeMl: normalizedNumber(
+          fields.bottleVolumeMl.value,
+          "bottle.volumeMl",
+          validationIssues,
+          parseVolumeMl,
+        ),
+        barcode: text(fields.barcode.value),
+        lotCode: text(fields.lotCode.value),
+      },
+      rawSuggestion: {
+        extractorId: extraction.extractorId,
+        model: extraction.model,
+        alcoholPercent: fields.alcoholPercent.value,
+        bottleVolumeMl: fields.bottleVolumeMl.value,
+        vintageYear: vintageLabel,
+        extraction: result,
+      },
+    },
+    validationIssues,
+  );
+  const reviewReasons = [
+    ...result.warnings,
+    ...(result.bottle_same_across_images ? [] : ["The images may show different bottles."]),
+    ...Object.entries(fields).flatMap(([name, field]) =>
+      field.notes.map((note) => `${name}: ${note}`),
+    ),
+    ...result.raw_text_by_image.flatMap((image) =>
+      image.notes.map((note) => `Image ${image.image_index}: ${note}`),
+    ),
     ...(candidate.validationIssues ?? []).map(
       (issue) => `${issue.path}: ${issue.message} Label value: ${JSON.stringify(issue.rawValue)}.`,
     ),
   ];
   return {
     candidate,
-    imageText: suggestion.structuredExtraction ?? suggestion,
-    model: "multi-extractor-combiner",
-    reviewDecision:
-      reasons.length === 0
-        ? { kind: "auto_import", reasons: [] }
-        : { kind: "needs_review", reason: "ocr_human_review_required", reasons },
+    reviewReasons: [...new Set(reviewReasons.map((reason) => reason.trim()).filter(Boolean))],
   };
 }
 
-export { defaultBottleExtractorConfigs };
+function labelText(extraction: BottleExtractorResult): string {
+  const lines =
+    extraction.canonical_label_text_lines.length === 0
+      ? extraction.raw_text_by_image.map((image) => image.text).join("\n\n")
+      : extraction.canonical_label_text_lines.join("\n");
+  return lines.trim().slice(0, 4_000);
+}
 
-export function decideCaptureImport({
-  combined,
-  extractors,
-}: {
-  readonly combined: BottleCombinedExtraction;
-  readonly extractors: Readonly<
-    Record<string, Pick<BottleExtractorResult, "bottle_same_across_images">>
-  >;
-}): CaptureImportReviewDecision {
-  const reasons = [...combined.human_review_reasons];
-  if (combined.requires_human_review && reasons.length === 0) {
-    reasons.push("The reconciliation model requested human review.");
-  }
-  if (combined.overall_confidence < 0.85) {
-    reasons.push(
-      `Overall OCR confidence is ${combined.overall_confidence}; at least 0.85 is required.`,
-    );
-  }
-
-  const winery = combined.canonical_fields.wineryName;
-  if (winery.value === null || winery.value.trim() === "") {
-    reasons.push("The producer or winery is missing.");
-  } else if (winery.confidence < 0.8) {
-    reasons.push(`Producer confidence is ${winery.confidence}; at least 0.8 is required.`);
-  }
-
-  const identityFields = [
-    combined.canonical_fields.displayName,
-    combined.canonical_fields.appellation,
-  ];
-  if (
-    !(
-      combined.canonical_fields.grapeVarieties.value.length > 0 &&
-      combined.canonical_fields.grapeVarieties.confidence >= 0.75
-    ) &&
-    !identityFields.some(
-      (field) => field.value !== null && field.value.trim() !== "" && field.confidence >= 0.75,
-    )
-  ) {
-    reasons.push(
-      "No grape variety, wine designation, or appellation has confidence of at least 0.75.",
-    );
-  }
-
-  reasons.push(
-    ...combined.field_disagreements.map((disagreement) => `Field disagreement: ${disagreement}`),
-    ...Object.entries(extractors)
-      .filter(([, extractor]) => !extractor.bottle_same_across_images)
-      .map(([extractorId]) => `${extractorId} found that the images may show different bottles.`),
-  );
-
-  const uniqueReasons = [...new Set(reasons.map((reason) => reason.trim()).filter(Boolean))];
-  return uniqueReasons.length === 0
-    ? { kind: "auto_import", reasons: [] }
-    : {
-        kind: "needs_review",
-        reason: "ocr_human_review_required",
-        reasons: uniqueReasons,
-      };
+function text(value: string | null): string {
+  return value?.trim() ?? "";
 }
 
 export async function captureImageContent({
@@ -236,80 +178,6 @@ export async function captureImageContent({
     });
   }
   return content;
-}
-
-function candidateFromSuggestion(
-  suggestion: BottleOcrSuggestion,
-  vintageLabel: string | null,
-): ImportCandidate {
-  const validationIssues: CandidateValidationIssue[] = [];
-  const wineryName = text(suggestion.wineryName) ?? "";
-  const displayName = text(suggestion.displayName) ?? "";
-  const vintageYear = normalizedNumber(
-    vintageLabel,
-    "wine.vintageYear",
-    validationIssues,
-    parseYear,
-  );
-  const candidate: ImportCandidate = {
-    wine: {
-      wineryName,
-      brandName: text(suggestion.brandName) ?? undefined,
-      baseName: displayName,
-      designation: displayName,
-      displayName,
-      vintageYear,
-      vintageStatus:
-        vintageYear === undefined
-          ? isNonVintage(vintageLabel)
-            ? "non_vintage"
-            : "unknown"
-          : "year",
-      grapeVarieties: grapeVarietiesFromText(suggestion.grapeVarieties),
-      country: text(suggestion.country) ?? "",
-      region: text(suggestion.region) ?? "",
-      appellation: text(suggestion.appellation) ?? "",
-      classification: text(suggestion.classification) ?? "",
-      wineType: text(suggestion.wineType) ?? "",
-      wineColor: text(suggestion.wineColor) ?? "",
-      addressQualification: text(suggestion.addressQualification) ?? "",
-      alcoholPercent: normalizedNumber(
-        suggestion.alcoholPercent,
-        "wine.alcoholPercent",
-        validationIssues,
-        parseAlcoholPercent,
-      ),
-      drinkFromYear: normalizedNumber(
-        suggestion.drinkFromYear,
-        "wine.drinkFromYear",
-        validationIssues,
-        parseYear,
-      ),
-      drinkToYear: normalizedNumber(
-        suggestion.drinkToYear,
-        "wine.drinkToYear",
-        validationIssues,
-        parseYear,
-      ),
-      description: text(suggestion.description) ?? "",
-      drinkingAdvice: text(suggestion.drinkingAdvice) ?? "",
-      labelText: text(suggestion.labelText) ?? "",
-      sourceUrl: text(suggestion.sourceUrl) ?? "",
-      notes: text(suggestion.wineNotes) ?? "",
-    },
-    bottle: {
-      volumeMl: normalizedNumber(
-        suggestion.bottleVolumeMl,
-        "bottle.volumeMl",
-        validationIssues,
-        parseVolumeMl,
-      ),
-      barcode: text(suggestion.barcode) ?? "",
-      lotCode: text(suggestion.lotCode) ?? "",
-    },
-    rawSuggestion: suggestion,
-  };
-  return validateNormalizedCandidate(candidate, validationIssues);
 }
 
 function validateNormalizedCandidate(
@@ -399,14 +267,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function text(value: string | undefined): string | null {
-  if (value === undefined) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
 function isNonVintage(value: string | null): boolean {
   return value !== null && /^(?:n[.\s]?v[.]?|non[ -]?vintage)$/iu.test(value.trim());
 }
@@ -477,13 +337,4 @@ function parseVolumeMl(value: string): number | undefined {
   if (scaled % ratio.denominator !== 0n) return undefined;
   const volume = scaled / ratio.denominator;
   return volume >= 1n && volume <= 30_000n ? Number(volume) : undefined;
-}
-
-function grapeVarietiesFromText(value: string | undefined): readonly string[] {
-  return (
-    value
-      ?.split(/[,;/+&]/u)
-      .map((grape) => grape.trim())
-      .filter((grape) => grape !== "") ?? []
-  );
 }

@@ -214,6 +214,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       siteId: capture.siteId,
       userId: user.userId,
       expectedRevision: payload.expectedRevision,
+      siteId: capture.siteId,
+      userId: user.userId,
     });
     return context.json({ data: { reviewRevision, reviewCandidate: payload.candidate } });
   })

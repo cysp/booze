@@ -1,5 +1,7 @@
 # Project audit
 
+This is a historical change record. Its remaining-priority list describes the reviewed revision; see [implementation status](status.md) for current capabilities and work.
+
 Audit date: 2026-09-08. Starting commit: `5e3d9c6`. Scope: product intent, browser flows, HTTP and MCP contracts, authorization, stored-data integrity, capture processing, deployment, dependencies, and verification.
 
 The changes were subsequently rebased onto `origin/main` at `316fee9` on 2026-09-22 and subjected to a [comprehensive self review](self-review.md). Current upstream dependencies and UI-library adaptations were retained.
