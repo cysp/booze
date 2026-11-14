@@ -5,7 +5,7 @@ import type { createD1Client } from "@chikachow/booze-db";
 import { consumeBottle, moveBottle } from "../catalogue-operations.ts";
 import { createStorageLocation } from "../location-operations.ts";
 import { setDrinkingWindow } from "../wine-operations.ts";
-import { assertCanReadStorageLocation, getBottle, withDrinkStatus } from "../api/inventory.ts";
+import { getBottle, withDrinkStatus } from "../api/inventory.ts";
 import {
   bottleDetail,
   listBottleSummaries,
@@ -24,7 +24,6 @@ import {
   resolveStorageLocationId,
   resolveWineVintageId,
 } from "./catalogue.ts";
-import { mcpEntityId } from "./ids.ts";
 import { toolJson } from "./pagination.ts";
 import {
   bottleDetailSchema,
@@ -167,7 +166,7 @@ export function createBoozeMcpServer({
     {
       annotations: readOnlyClosedWorldToolAnnotations,
       title: "Get wine",
-      description: "Fetch one authorised wine vintage by MCP wine ID.",
+      description: "Fetch one authorised wine vintage by its canonical stored wine vintage ID.",
       inputSchema: getWineInputSchema,
       outputSchema: {
         wine: wineVintageSummarySchema,
@@ -278,7 +277,6 @@ export function createBoozeMcpServer({
     },
     async ({ locationId, ...input }) => {
       const storageLocationId = await resolveStorageLocationId({ database, locationId, userId });
-      await assertCanReadStorageLocation({ database, storageLocationId, userId });
       const page = await listLocationBottleSummaries({
         database,
         input: { locationId, ...input },
@@ -338,34 +336,25 @@ export function createBoozeMcpServer({
       inputSchema: createStorageLocationInputSchema,
       outputSchema: createStorageLocationOutputSchema.shape,
     },
-    async ({ siteId, parentStorageLocationId, name, locationType }) => {
-      const result = await createStorageLocation({
-        context: { database, userId, source: "mcp" },
-        input: {
-          siteId,
-          parentId:
-            parentStorageLocationId === undefined || parentStorageLocationId === null
-              ? null
-              : await resolveStorageLocationId({
-                  database,
-                  userId,
-                  locationId: parentStorageLocationId,
-                }),
-          name,
-          locationType,
-        },
-      });
-      const encode = (location: typeof result.after) => ({
-        ...location,
-        id: mcpEntityId("location", location.id),
-        parentId: location.parentId === null ? null : mcpEntityId("location", location.parentId),
-      });
-      return toolJson({
-        ...result,
-        before: result.before === null ? null : encode(result.before),
-        after: encode(result.after),
-      });
-    },
+    async ({ siteId, parentStorageLocationId, name, locationType }) =>
+      toolJson(
+        await createStorageLocation({
+          context: { database, userId, source: "mcp" },
+          input: {
+            siteId,
+            parentId:
+              parentStorageLocationId === undefined || parentStorageLocationId === null
+                ? null
+                : await resolveStorageLocationId({
+                    database,
+                    userId,
+                    locationId: parentStorageLocationId,
+                  }),
+            name,
+            locationType,
+          },
+        }),
+      ),
   );
 
   server.registerTool(

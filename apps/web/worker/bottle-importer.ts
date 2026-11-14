@@ -19,6 +19,7 @@ import { createBottleStatements, prepareWineVintage } from "./api/catalogue.ts";
 import { stableId } from "./api/ids.ts";
 import { retryCatalogueTransaction } from "./api/catalogue-transaction.ts";
 import { hasWineIdentity, wineVintageStatus } from "../shared/wine-identity.ts";
+import { bottleQuantitySchema, catalogueCandidateSchema } from "../shared/catalogue-inputs.ts";
 import type { ImportCandidate } from "./bottle-extractor.ts";
 import {
   claimCaptureForImport,
@@ -29,6 +30,7 @@ import {
 export type ImportReviewReason =
   | "ambiguous_winery"
   | "ambiguous_wine_vintage"
+  | "invalid_candidate"
   | "missing_required_candidate"
   | "possible_existing_wine"
   | "saved_manual_corrections";
@@ -50,6 +52,7 @@ export type BottleImportResult =
       readonly kind: "needs_review";
       readonly reason: ImportReviewReason;
       readonly matchResult: BottleMatchResult;
+      readonly reviewReasons?: readonly string[];
     };
 
 export type BottleMatchResult =
@@ -104,6 +107,16 @@ export async function importBottleCandidate(
     if (committed !== null) {
       return committed;
     }
+    const reviewReasons = candidateValidationReasons(candidate, input.quantity);
+    if (reviewReasons.length > 0) {
+      return {
+        kind: "needs_review",
+        reason: "invalid_candidate",
+        reviewReasons,
+        matchResult: invalidCandidateMatch(),
+      };
+    }
+    const validatedInput = validatedImportInput(input);
     const [captureReview] = await database
       .select({ candidate: bottleCaptures.reviewCandidateJson })
       .from(bottleCaptures)
@@ -118,7 +131,11 @@ export async function importBottleCandidate(
       } as const;
       return { kind: "needs_review", reason: "saved_manual_corrections", matchResult };
     }
-    const matchResult = await matchBottleCandidate({ candidate, database, siteId });
+    const matchResult = await matchBottleCandidate({
+      candidate: validatedInput.candidate,
+      database,
+      siteId,
+    });
     if (matchResult.kind === "needs_review") {
       return {
         kind: "needs_review",
@@ -142,7 +159,7 @@ export async function importBottleCandidate(
     if (claim === null) return skipped;
     try {
       return await commitCaptureImport({
-        input,
+        input: validatedInput,
         claim,
         matchResult,
         wineVintageId:
@@ -176,6 +193,11 @@ export async function importReviewedCapture(
   } = input;
   const committed = await getCommittedCaptureImport({ captureId, database, runId });
   if (committed !== null) return committed;
+  const reviewReasons = candidateValidationReasons(input.candidate, input.quantity);
+  if (reviewReasons.length > 0) {
+    throw new HTTPException(400, { message: reviewReasons.join(" ") });
+  }
+  const validatedInput = validatedImportInput(input);
   // Manual preparation is read-only. The final batch validates the reviewed
   // snapshot and commits completion with inventory, without an intermediate claim.
   const claim = { captureId, runId, siteId, workflowInstanceId };
@@ -191,7 +213,7 @@ export async function importReviewedCapture(
   return retryCatalogueTransaction(async () => {
     try {
       return await commitCaptureImport({
-        input,
+        input: validatedInput,
         claim,
         matchResult,
         wineVintageId,
@@ -461,8 +483,46 @@ export async function getCommittedCaptureImport({
   return JSON.parse(run.result) as Extract<BottleImportResult, { readonly kind: "imported" }>;
 }
 
+function candidateValidationReasons(
+  candidate: ImportCandidate,
+  quantity?: number,
+): readonly string[] {
+  const reasons = (candidate.validationIssues ?? []).map(
+    (issue) => `${issue.path}: ${issue.message} Label value: ${JSON.stringify(issue.rawValue)}.`,
+  );
+  const validated = catalogueCandidateSchema.safeParse(candidate);
+  if (!validated.success) {
+    reasons.push(
+      ...validated.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
+    );
+  }
+  if (quantity !== undefined) {
+    const validatedQuantity = bottleQuantitySchema.safeParse(quantity);
+    if (!validatedQuantity.success)
+      reasons.push("quantity: Enter a whole bottle quantity between 1 and 24.");
+  }
+  return reasons;
+}
+
+function validatedImportInput(input: CaptureImportInput): CaptureImportInput {
+  return {
+    ...input,
+    candidate: { ...input.candidate, ...catalogueCandidateSchema.parse(input.candidate) },
+    quantity: bottleQuantitySchema.parse(input.quantity),
+  };
+}
+
+function invalidCandidateMatch(): BottleMatchResult {
+  return {
+    kind: "needs_review",
+    reason: "invalid_candidate",
+    wineryCandidates: [],
+    wineVintageCandidates: [],
+  };
+}
+
 export async function matchBottleCandidate({
-  candidate,
+  candidate: inputCandidate,
   database,
   siteId,
 }: {
@@ -470,6 +530,8 @@ export async function matchBottleCandidate({
   readonly database: BoozeDatabase;
   readonly siteId: string;
 }): Promise<BottleMatchResult> {
+  if (candidateValidationReasons(inputCandidate).length > 0) return invalidCandidateMatch();
+  const candidate = { ...inputCandidate, ...catalogueCandidateSchema.parse(inputCandidate) };
   if (
     !hasWineIdentity(candidate.wine) ||
     normalize(candidate.wine.wineryName || candidate.wine.brandName) === ""

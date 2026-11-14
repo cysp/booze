@@ -9,7 +9,6 @@ import {
 import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { mcpEntityId } from "./ids.ts";
 import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
 import type { listWineriesInputSchema, winerySummarySchema } from "./schemas.ts";
 import {
@@ -50,7 +49,9 @@ export async function listWineries({
     .select({
       siteId: uniqueWineryBrands.siteId,
       wineryId: uniqueWineryBrands.wineryId,
-      brandNames: sql<string | null>`group_concat(${uniqueWineryBrands.brandName})`.as(
+      brandNames: sql<
+        string | null
+      >`json_group_array(${uniqueWineryBrands.brandName}) filter (where ${uniqueWineryBrands.brandName} is not null)`.as(
         "brand_names",
       ),
     })
@@ -167,8 +168,7 @@ export async function listWineries({
 
   return {
     items: rowPage.items.map((row) => ({
-      brands:
-        row.brandNames === null ? [] : row.brandNames.split(",").filter((value) => value !== ""),
+      brands: row.brandNames === null ? [] : z.array(z.string()).parse(JSON.parse(row.brandNames)),
       country: row.country,
       inStockBottleCount: row.inStockBottleCount ?? 0,
       region: row.region,
@@ -176,7 +176,7 @@ export async function listWineries({
       siteId: row.siteId,
       wineVintageCount: row.wineVintageCount,
       winery: row.wineryName,
-      wineryId: mcpEntityId("winery", row.id),
+      wineryId: row.id,
     })),
     metadata: rowPage.metadata,
   };

@@ -1,7 +1,12 @@
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import type { ReactElement } from "react";
-import { useController, type Control, type FieldPath, type RegisterOptions } from "react-hook-form";
+import {
+  useController,
+  type Control,
+  type FieldPathByValue,
+  type RegisterOptions,
+} from "react-hook-form";
 
 import { validateBottleQuantity } from "../shared/quantity.ts";
 import { QuantityInput } from "./QuantityInput.tsx";
@@ -15,7 +20,7 @@ import {
 export type BottleFormFieldProps = {
   readonly control: Control<FormState>;
   readonly label: string;
-  readonly name: FieldPath<FormState>;
+  readonly name: FieldPathByValue<FormState, string>;
   readonly placeholder?: string;
   readonly required?: boolean;
   readonly disabled?: boolean;
@@ -29,10 +34,10 @@ function rulesFor({
   disabled,
 }: {
   readonly label: string;
-  readonly name: FieldPath<FormState>;
+  readonly name: FieldPathByValue<FormState, string>;
   readonly required: boolean | undefined;
   readonly disabled: boolean | undefined;
-}): RegisterOptions<FormState> {
+}): RegisterOptions<FormState, FieldPathByValue<FormState, string>> {
   return {
     validate: (value, values) => {
       if (disabled === true) return true;

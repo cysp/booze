@@ -5,13 +5,19 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
 import { createD1Client } from "@chikachow/booze-db";
+import { Hono } from "hono";
 
 import { upsertSite } from "./api/auth.ts";
 import { createBottleStatements } from "./api/catalogue.ts";
+import { problemResponseForError } from "./api/http.ts";
 import { userIdForClerkUser } from "./api/ids.ts";
 import type { Bindings } from "./api/types.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
+
+const app = new Hono<{ Bindings: Bindings }>()
+  .route("/", bottleRoutes)
+  .onError(problemResponseForError);
 
 const siteId = "site_user_abcdefghijklmnopqrstuvwxyz_long_site_identifier";
 const wine = {
@@ -74,7 +80,7 @@ await describe("catalogue mutation preservation", async () => {
     assert.equal(denied.status, 400);
     const id = await create(db, { wine: { wineryName: "" }, allowUnidentified: true });
     assert.equal(count(db, "wineries"), 0);
-    const response = await bottleRoutes.request(
+    const response = await app.request(
       "http://localhost/bottles",
       { headers: { "x-dev-user": "tester" } },
       { DB: asD1(db) },
@@ -601,7 +607,7 @@ async function request(
   };
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Route tests supply only the database binding used by these handlers.
   const bindings = { DB: database } as Bindings;
-  return bottleRoutes.request(
+  return app.request(
     `http://localhost${path}`,
     {
       method,

@@ -2,6 +2,7 @@ import { bottleCaptures, bottleLocations, storageLocations } from "@chikachow/bo
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
+import { entityIdSchema } from "../shared/entity-id.ts";
 
 import { requireSitePermission } from "./api/auth.ts";
 import { generatedId } from "./api/ids.ts";
@@ -13,14 +14,14 @@ import {
 } from "./operation-transaction.ts";
 
 export const createStorageLocationInputSchema = z.strictObject({
-  siteId: z.string().trim().min(1),
-  parentId: z.string().trim().min(1).nullable().default(null),
+  siteId: entityIdSchema,
+  parentId: entityIdSchema.nullable().default(null),
   name: z.string().trim().min(1).max(120),
   locationType: z.string().trim().min(1).max(40).default("area"),
 });
 
 export const updateStorageLocationInputSchema = z.strictObject({
-  parentId: z.string().trim().min(1).nullable().optional(),
+  parentId: entityIdSchema.nullable().optional(),
   name: z.string().trim().min(1).max(120).optional(),
   locationType: z.string().trim().min(1).max(40).optional(),
   notes: z.string().trim().max(2_000).nullable().optional(),

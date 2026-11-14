@@ -19,6 +19,7 @@ function renderInventory(
   items = inventoryFixtures.many as readonly ReturnType<typeof inventoryItemFixture>[],
   onEditBottle = noop as (item: ReturnType<typeof inventoryItemFixture>) => void,
   onCreateSite?: () => void,
+  grouping: "winery" | "storage" = "winery",
 ) {
   return render(
     <InventoryArea
@@ -29,10 +30,13 @@ function renderInventory(
       ]}
       editableSiteIds={editableSiteIds}
       filter=""
-      grouping="winery"
+      grouping={grouping}
       items={items}
-      locationFilter=""
-      locationOptions={["Home cellar / Left rack"]}
+      siteIdFilter=""
+      siteOptions={[]}
+      setSiteIdFilter={noop}
+      storageLocationIdFilter=""
+      locationOptions={[{ label: "Home cellar / Left rack", value: "location-left" }]}
       locations={locationsFixture}
       varietalFilter=""
       varietalOptions={["Shiraz"]}
@@ -42,7 +46,7 @@ function renderInventory(
       setDrinkStatusFilter={noop}
       setFilter={noop}
       setGrouping={noop}
-      setLocationFilter={noop}
+      setStorageLocationIdFilter={noop}
       setVarietalFilter={noop}
     />,
   );
@@ -60,13 +64,13 @@ describe("InventoryArea", () => {
   it("lets the user choose the exact physical bottle within a shared wine", async () => {
     const user = userEvent.setup();
     const first = inventoryItemFixture({
-      bottleId: "bottle-1",
-      position: "Slot 1",
+      id: "bottle-1",
+      positionHint: "Slot 1",
       bottleNotes: "Pristine",
     });
     const second = inventoryItemFixture({
-      bottleId: "bottle-2",
-      position: "Slot 2",
+      id: "bottle-2",
+      positionHint: "Slot 2",
       lotCode: "L42",
       bottleNotes: "Damaged label",
     });
@@ -84,6 +88,66 @@ describe("InventoryArea", () => {
     await user.click(within(bottleRow).getByRole("button", { name: "Edit bottle 2" }));
 
     expect(onEditBottle).toHaveBeenCalledExactlyOnceWith(second);
+  });
+
+  it("keeps same-name sites and locations in separate storage groups", () => {
+    const items = [
+      inventoryItemFixture({
+        id: "first",
+        siteId: "site-a",
+        siteName: "Cellar",
+        storageLocationId: "rack-a",
+        storageLocationName: "Rack",
+      }),
+      inventoryItemFixture({
+        id: "second",
+        siteId: "site-b",
+        siteName: "Cellar",
+        storageLocationId: "rack-b",
+        storageLocationName: "Rack",
+      }),
+      inventoryItemFixture({
+        id: "third",
+        siteId: "site-a",
+        siteName: "Cellar",
+        storageLocationId: "rack-c",
+        storageLocationName: "Rack",
+      }),
+    ];
+    const { container } = renderInventory(
+      new Set(["site-a", "site-b"]),
+      items,
+      noop,
+      undefined,
+      "storage",
+    );
+    expect(container.querySelectorAll(".inventory-group")).toHaveLength(2);
+    expect(container.querySelectorAll(".nested-group")).toHaveLength(3);
+    expect(screen.getByRole("heading", { name: "Cellar (site-a)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Cellar (site-b)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Rack (rack-a)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Rack (rack-c)" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(3);
+  });
+
+  it("keeps an opaque winery ID separate from a missing winery key", () => {
+    const items = [
+      inventoryItemFixture({
+        id: "known",
+        wineryId: "unknown:site-owner",
+        wineryName: "Known producer",
+      }),
+      inventoryItemFixture({
+        id: "unknown",
+        wineryId: null,
+        wineryName: "",
+        wineVintageId: "unknown-wine",
+      }),
+    ];
+    const { container } = renderInventory(new Set(["site-owner"]), items);
+    expect(container.querySelectorAll(".inventory-group")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Known producer" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Unknown winery" })).toBeVisible();
   });
 
   it("does not expose write actions for read-only sites", () => {

@@ -1,3 +1,4 @@
+/* oxlint-disable import/max-dependencies -- Capture review composes controls and shared catalogue contracts. */
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Selector } from "@astryxdesign/core/Selector";
@@ -12,6 +13,7 @@ import type {
 } from "../shared/capture-import.ts";
 import { hasWineIdentity } from "../shared/wine-identity.ts";
 import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
+import { GrapeVarietiesInput } from "./GrapeVarietiesInput.tsx";
 import type { CaptureResource } from "./inventory-model.ts";
 
 const wineFields = [
@@ -19,7 +21,6 @@ const wineFields = [
   ["brandName", "Label / brand"],
   ["designation", "Wine name / designation (optional)"],
   ["vintageYear", "Vintage year"],
-  ["grapeVarieties", "Grape varieties (comma separated)"],
   ["country", "Country"],
   ["region", "Region"],
   ["appellation", "Appellation"],
@@ -51,6 +52,7 @@ const numericFields: ReadonlySet<string> = new Set([
   "volumeMl",
 ]);
 type ReviewDraft = {
+  readonly grapeVarieties: readonly string[];
   readonly wine: Readonly<Record<string, string>>;
   readonly bottle: Readonly<Record<string, string>>;
 };
@@ -88,7 +90,7 @@ export function CaptureReview({
   const needsSavedCandidate = revision === 0 && isMissing(objectField(initial, "wine"));
   const identified = hasWineIdentity({
     ...draft.wine,
-    grapeVarieties: (draft.wine["grapeVarieties"] ?? "").split(","),
+    grapeVarieties: draft.grapeVarieties,
   });
   const sourceVersion = JSON.stringify([
     capture.latestRun?.id ?? "manual",
@@ -226,6 +228,17 @@ export function CaptureReview({
               }}
             />
           ))}
+          <GrapeVarietiesInput
+            disabled={blocked}
+            name={`${capture.id}.wine.grapeVarieties`}
+            value={draft.grapeVarieties}
+            onChange={(grapeVarieties) => {
+              const next = { ...draft, grapeVarieties };
+              setDraft(next);
+              onDirtyChange(JSON.stringify(next) !== JSON.stringify(savedDraft));
+              setMessage(null);
+            }}
+          />
           {bottleFields.map(([key, label]) => (
             <CaptureReviewField
               fieldKey={key}
@@ -295,6 +308,7 @@ function reviewDraft(candidate: unknown): ReviewDraft {
   const wine = objectField(candidate, "wine");
   const bottle = objectField(candidate, "bottle");
   return {
+    grapeVarieties: stringValues(objectField(wine, "grapeVarieties")),
     wine: {
       ...Object.fromEntries(wineFields.map(([key]) => [key, displayField(objectField(wine, key))])),
       vintageStatus:
@@ -311,16 +325,6 @@ function draftFields(
 ): Record<string, string | number | string[]> {
   return Object.fromEntries(
     Object.entries(values).flatMap<[string, string | number | string[]]>(([key, value]) => {
-      if (key === "grapeVarieties")
-        return [
-          [
-            key,
-            value
-              .split(",")
-              .map((part) => part.trim())
-              .filter(Boolean),
-          ],
-        ];
       if (numericFields.has(key)) return value.trim() === "" ? [] : [[key, Number(value)]];
       return [[key, value.trim()]];
     }),
@@ -333,6 +337,9 @@ function draftCandidate(draft: ReviewDraft): CaptureReviewCandidate {
   return {
     wine: {
       ...wine,
+      grapeVarieties: [...draft.grapeVarieties]
+        .map((value) => value.trim())
+        .filter((value) => value !== ""),
       wineryName: (draft.wine["wineryName"] ?? "").trim(),
       designation: (draft.wine["designation"] ?? "").trim(),
       vintageStatus: status === "year" || status === "non_vintage" ? status : "unknown",
@@ -474,6 +481,7 @@ function OriginalCaptureFacts({ candidate }: { readonly candidate: unknown }): R
         {[
           ...facts(objectField(candidate, "wine"), [
             ...wineFields,
+            ["grapeVarieties", "Grape varieties"],
             ["displayName", "Extracted display name"],
             ["baseName", "Extracted base name"],
           ]),

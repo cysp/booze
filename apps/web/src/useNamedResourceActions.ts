@@ -75,7 +75,7 @@ export function useNamedResourceActions({
       return false;
     }
     setStatus(`Updating ${definition.label}...`);
-    const response = await fetch(`${definition.collectionPath}/${editor.id}`, {
+    const response = await fetch(`${definition.collectionPath}/${encodeURIComponent(editor.id)}`, {
       method: "PATCH",
       headers: jsonHeaders(await getAuthHeaders()),
       body: JSON.stringify({ name: editor.name }),
@@ -94,7 +94,7 @@ export function useNamedResourceActions({
 
   async function remove(id: string): Promise<boolean> {
     setStatus(`Deleting ${definition.label}...`);
-    const response = await fetch(`${definition.collectionPath}/${id}`, {
+    const response = await fetch(`${definition.collectionPath}/${encodeURIComponent(id)}`, {
       method: "DELETE",
       headers: await getAuthHeaders(),
     });

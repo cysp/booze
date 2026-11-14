@@ -6,7 +6,6 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 
 import { asD1, migratedDatabase } from "./d1-support.ts";
-import { mcpEntityId } from "./mcp/ids.ts";
 import { createBoozeMcpServer } from "./mcp/server.ts";
 import {
   bottleOutputSchema,
@@ -96,18 +95,11 @@ await describe("MCP wine identity reads", async () => {
       }
       assert.deepEqual(
         new Set(wines.map((wine) => wine.wineId)),
-        new Set(
-          ["unknown-a", "unknown-b", "year", "non-vintage", "known"].map((id) =>
-            mcpEntityId("wine", id),
-          ),
-        ),
+        new Set(["unknown-a", "unknown-b", "year", "non-vintage", "known"]),
       );
       assert.equal(wines.length, 5);
       assert.equal(wines.filter((wine) => wine.wineryId === null && wine.winery === "").length, 4);
-      assert.equal(
-        wines.find((wine) => wine.wineId === mcpEntityId("wine", "unknown-a"))?.bottleCount,
-        2,
-      );
+      assert.equal(wines.find((wine) => wine.wineId === "unknown-a")?.bottleCount, 2);
 
       const bottles: z.infer<typeof bottleSchema>[] = [];
       pageToken = undefined;
@@ -157,7 +149,7 @@ await describe("MCP wine identity reads", async () => {
         { id: "non-vintage", bottleId: "bottle-nv", label: "NV", year: null },
         { id: "year", bottleId: "bottle-year", label: "2022", year: 2022 },
       ]) {
-        const wineId = mcpEntityId("wine", expectation.id);
+        const wineId = expectation.id;
         const wineDetail = z
           .strictObject({ wine: wineSchema, wineId: z.string() })
           .parse(await call(client, "cellar.get_wine", { wineId }));
@@ -191,7 +183,7 @@ await describe("MCP wine identity reads", async () => {
       );
       assert.deepEqual(
         wines.wines.map((wine) => wine.wineId),
-        [mcpEntityId("wine", "non-vintage")],
+        ["non-vintage"],
       );
       assert.deepEqual(
         bottles.bottles.map((bottle) => bottle.bottleId),

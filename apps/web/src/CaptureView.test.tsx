@@ -419,12 +419,12 @@ it.each([
   const duplicateTitle = {
     displayName: "Same Chardonnay",
     wineryName: "Producer",
-    grapeVarieties: "Chardonnay",
+    grapeVarieties: ["Chardonnay"],
   };
   const first = inventoryItemFixture({ ...duplicateTitle, wineVintageId: "first-wine" });
   const second = inventoryItemFixture({
     ...duplicateTitle,
-    bottleId: "second-bottle",
+    id: "second-bottle",
     wineVintageId: "second-wine",
   });
   const otherSite = inventoryItemFixture({
@@ -449,7 +449,7 @@ it.each([
     ],
     wines: [first, second, otherSite].map((item) => ({
       ...item,
-      grapeVarieties: item.grapeVarieties?.split(",") ?? [],
+      grapeVarieties: item.grapeVarieties,
     })),
     onImport,
   });

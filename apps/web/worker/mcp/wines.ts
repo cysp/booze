@@ -14,7 +14,6 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import { calculateDrinkStatus } from "../api/inventory.ts";
-import { mcpEntityId } from "./ids.ts";
 import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
 import type { listWinesInputSchema, wineVintageSummarySchema } from "./schemas.ts";
 import {
@@ -138,44 +137,6 @@ export async function getWineVintageSummary({
   readonly userId: string;
   readonly wineId: string;
 }): Promise<z.infer<typeof wineVintageSummarySchema>> {
-  const wines = await listAuthorisedWineVintageSummaries({ database, userId });
-  const wine = wines.find((candidate) => candidate.wineId === wineId);
-  if (wine === undefined) {
-    throw new HTTPException(404, { message: "Wine vintage not found" });
-  }
-  return wine;
-}
-
-export async function resolveWineVintageId({
-  database,
-  userId,
-  wineId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly userId: string;
-  readonly wineId: string;
-}): Promise<string> {
-  const rows = await database
-    .select({ id: wineVintages.id })
-    .from(wineVintages)
-    .innerJoin(siteMemberships, eq(wineVintages.siteId, siteMemberships.siteId))
-    .where(eq(siteMemberships.userId, userId));
-  const row = rows.find((candidate) => {
-    return mcpEntityId("wine", candidate.id) === wineId;
-  });
-  if (row === undefined) {
-    throw new HTTPException(404, { message: "Wine vintage not found" });
-  }
-  return row.id;
-}
-
-async function listAuthorisedWineVintageSummaries({
-  database,
-  userId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly userId: string;
-}): Promise<readonly z.infer<typeof wineVintageSummarySchema>[]> {
   const grapeVarietiesByWine = grapeVarietiesByWineQuery(database);
   const bottleCountsByWine = bottleCountsByWineQuery(database);
 
@@ -196,17 +157,42 @@ async function listAuthorisedWineVintageSummaries({
         eq(wineVintages.id, bottleCountsByWine.wineVintageId),
       ),
     )
-    .where(eq(siteMemberships.userId, userId))
-    .orderBy(desc(wineVintages.vintageYear), asc(wineries.name), asc(wineVintages.displayName));
+    .where(and(eq(siteMemberships.userId, userId), eq(wineVintages.id, wineId)))
+    .limit(1);
 
-  return rows.map((row) => wineVintageSummaryFromRow(row));
+  const row = rows[0];
+  if (row === undefined) {
+    throw new HTTPException(404, { message: "Wine vintage not found" });
+  }
+  return wineVintageSummaryFromRow(row);
+}
+
+export async function resolveWineVintageId({
+  database,
+  userId,
+  wineId,
+}: {
+  readonly database: ReturnType<typeof createD1Client>;
+  readonly userId: string;
+  readonly wineId: string;
+}): Promise<string> {
+  const [row] = await database
+    .select({ id: wineVintages.id })
+    .from(wineVintages)
+    .innerJoin(siteMemberships, eq(wineVintages.siteId, siteMemberships.siteId))
+    .where(and(eq(siteMemberships.userId, userId), eq(wineVintages.id, wineId)))
+    .limit(1);
+  if (row === undefined) {
+    throw new HTTPException(404, { message: "Wine vintage not found" });
+  }
+  return row.id;
 }
 
 function grapeVarietiesByWineQuery(database: ReturnType<typeof createD1Client>) {
   return database
     .select({
       wineVintageId: wineConstituents.wineVintageId,
-      grapeVarieties: sql<string | null>`group_concat(${grapeVarieties.name})`.as(
+      grapeVarieties: sql<string | null>`json_group_array(${grapeVarieties.name})`.as(
         "grape_varieties",
       ),
     })
@@ -292,9 +278,7 @@ function wineVintageSummaryFromRow(row: {
     drinkFromYear: row.drinkFromYear,
     drinkToYear: row.drinkToYear,
     grapeVarieties:
-      row.grapeVarieties === null
-        ? []
-        : row.grapeVarieties.split(",").filter((value) => value !== ""),
+      row.grapeVarieties === null ? [] : z.array(z.string()).parse(JSON.parse(row.grapeVarieties)),
     inStockBottleCount: row.inStockBottleCount ?? 0,
     region: row.region,
     site: row.siteName,
@@ -304,8 +288,8 @@ function wineVintageSummaryFromRow(row: {
     wine: row.displayName,
     wineColor: row.wineColor,
     wineType: row.wineType,
-    wineId: mcpEntityId("wine", row.id),
+    wineId: row.id,
     winery: row.wineryName,
-    wineryId: row.wineryId === null ? null : mcpEntityId("winery", row.wineryId),
+    wineryId: row.wineryId,
   };
 }

@@ -9,6 +9,8 @@ import {
 import { and, asc, eq, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { HTTPException } from "hono/http-exception";
+import { entityIdSchema } from "../../shared/entity-id.ts";
+import type { CriticReviewResource } from "../../shared/catalogue-resources.ts";
 
 import {
   commitOperation,
@@ -38,8 +40,8 @@ export type ReviewSourceInput = {
 };
 
 export const criticReviewInputSchema = z.object({
-  id: z.string().trim().min(1).max(120).optional(),
-  reviewSourceId: z.string().trim().min(1).max(120).optional(),
+  id: entityIdSchema.optional(),
+  reviewSourceId: entityIdSchema.optional(),
   reviewSourceName: z.string().trim().min(1).max(160).optional(),
   ratingText: z.string().trim().min(1).max(160),
   ratingValue: z.number().min(0).max(1000).optional(),
@@ -63,22 +65,7 @@ export type ReviewSourceResource = {
   readonly isActive: boolean;
 };
 
-export type CriticReviewResource = {
-  readonly id: string;
-  readonly siteId: string;
-  readonly wineVintageId: string;
-  readonly reviewSourceId: string;
-  readonly reviewSourceName: string;
-  readonly ratingText: string;
-  readonly ratingValue: number | null;
-  readonly ratingScale: string | null;
-  readonly sourceUrl: string | null;
-  readonly reviewedAt: string | null;
-  readonly provenance: string | null;
-  readonly notes: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-};
+export type { CriticReviewResource } from "../../shared/catalogue-resources.ts";
 
 export type CriticReviewFact = Omit<CriticReviewResource, "createdAt" | "updatedAt">;
 

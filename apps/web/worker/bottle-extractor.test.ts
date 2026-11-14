@@ -3,8 +3,12 @@ import { describe, it } from "node:test";
 
 import { buildCaptureImportCandidate, decideCaptureImport } from "./bottle-extractor.ts";
 import type { BottleCombinedExtraction } from "./bottle-ocr.ts";
+import { importBottleCandidate, importReviewedCapture } from "./bottle-importer.ts";
+import { captureDatabaseFromEnv, createCaptureRun } from "./capture-store.ts";
+import { asD1, migratedDatabase } from "./d1-support.ts";
 
 type CombinedOptions = {
+  readonly alcoholValue?: string | null;
   readonly disagreements?: readonly string[];
   readonly displayNameConfidence?: number;
   readonly displayNameValue?: string | null;
@@ -14,6 +18,7 @@ type CombinedOptions = {
   readonly requiresHumanReview?: boolean;
   readonly vintageConfidence?: number;
   readonly vintageValue?: string | null;
+  readonly volumeValue?: string | null;
   readonly wineryConfidence?: number;
   readonly wineryValue?: string | null;
 };
@@ -133,6 +138,137 @@ await describe("capture OCR import review decision", async () => {
   });
 });
 
+await describe("capture label values at the inventory persistence seam", async () => {
+  await it("normalizes metric units and unambiguous comma decimals before storing stock", async () => {
+    for (const volume of ["75 cl", "0,75 L", "0.75 L", "750 mL", "75 centilitres"]) {
+      const { sqlite, input } = await importSetup({ volumeValue: volume, alcoholValue: "14,5%" });
+      try {
+        assert.equal(input.extracted.reviewDecision.kind, "auto_import");
+        assert.equal((await importBottleCandidate(input)).kind, "imported");
+        assert.deepEqual(
+          {
+            ...sqlite
+              .prepare(
+                "SELECT b.volume_ml, w.alcohol_percent FROM bottles b JOIN wine_vintages w ON w.id = b.wine_vintage_id",
+              )
+              .get(),
+          },
+          { volume_ml: 750, alcohol_percent: 14.5 },
+          volume,
+        );
+      } finally {
+        sqlite.close();
+      }
+    }
+  });
+
+  await it("retains invalid or ambiguous label evidence for review and blocks automatic stock changes", async () => {
+    const examples: readonly CombinedOptions[] = [
+      ...[
+        "1,500 L",
+        "750 mL extra",
+        "0 mL",
+        "-750 mL",
+        "750.5 mL",
+        "0.0001 L",
+        "31 L",
+        "NaN mL",
+        "Infinity L",
+        "1e3 mL",
+        "25 fl oz",
+      ].map((volumeValue) => ({ volumeValue })),
+      ...["101%", "-1%", "14.5-15%", "about 14.5%", "NaN%"].map((alcoholValue) => ({
+        alcoholValue,
+      })),
+      { vintageValue: "2020/2021" },
+      { vintageValue: "2201" },
+    ];
+    for (const example of examples) {
+      const { sqlite, input } = await importSetup(example);
+      try {
+        assert.equal(input.extracted.reviewDecision.kind, "needs_review", JSON.stringify(example));
+        assert.match(input.extracted.reviewDecision.reasons.join(" "), /wine\.|bottle\./u);
+        assert.equal(
+          (await importBottleCandidate(input)).kind,
+          "needs_review",
+          JSON.stringify(example),
+        );
+        assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+        assert.equal(
+          sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"],
+          0,
+        );
+        assert.equal(
+          sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"],
+          "extracting",
+        );
+        for (const raw of Object.values(example)) {
+          assert.ok(JSON.stringify(input.candidate.rawSuggestion).includes(String(raw)));
+        }
+      } finally {
+        sqlite.close();
+      }
+    }
+  });
+
+  await it("validates typed candidates again for direct automatic and reviewed import callers", async () => {
+    for (const volumeMl of [0, 30_001, 750.5, Infinity, Number.NaN]) {
+      for (const reviewed of [false, true]) {
+        const { sqlite, input } = await importSetup();
+        try {
+          const invalid = { ...input, candidate: { ...input.candidate, bottle: { volumeMl } } };
+          if (reviewed) {
+            sqlite.exec("UPDATE bottle_captures SET status = 'needs_review'");
+            await assert.rejects(importReviewedCapture({ ...invalid, expectedReviewRevision: 0 }));
+          } else {
+            const result = await importBottleCandidate(invalid);
+            assert.equal(result.kind, "needs_review");
+            assert.equal(result.reason, "invalid_candidate");
+          }
+          assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+          assert.equal(
+            sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"],
+            0,
+          );
+        } finally {
+          sqlite.close();
+        }
+      }
+    }
+  });
+});
+
+async function importSetup(options: CombinedOptions = {}) {
+  const sqlite = migratedDatabase();
+  sqlite.exec(
+    "INSERT INTO users (id,clerk_user_id) VALUES ('user','user'); INSERT INTO sites (id,name) VALUES ('site','Cellar'); INSERT INTO bottle_captures (id,site_id,user_id,status,workflow_instance_id) VALUES ('capture','site','user','extracting','capture')",
+  );
+  const database = captureDatabaseFromEnv(asD1(sqlite));
+  await createCaptureRun({
+    captureId: "capture",
+    database,
+    runId: "run_capture",
+    status: "extracting",
+  });
+  const extracted = buildCaptureImportCandidate({
+    combined: combinedExtraction(options),
+    extractors: {},
+  });
+  return {
+    sqlite,
+    input: {
+      extracted,
+      candidate: extracted.candidate,
+      captureId: "capture",
+      database,
+      runId: "run_capture",
+      workflowInstanceId: "capture",
+      quantity: 1,
+      siteId: "site",
+    },
+  };
+}
+
 function combinedExtraction(options: CombinedOptions = {}): BottleCombinedExtraction {
   return {
     model_role: "combiner",
@@ -163,8 +299,12 @@ function combinedExtraction(options: CombinedOptions = {}): BottleCombinedExtrac
       region: textField("Barossa Valley"),
       appellation: textField(null),
       classification: textField(null),
-      alcoholPercent: textField("14.5%"),
-      bottleVolumeMl: textField("750 mL"),
+      alcoholPercent: textField(
+        "alcoholValue" in options ? (options.alcoholValue ?? null) : "14.5%",
+      ),
+      bottleVolumeMl: textField(
+        "volumeValue" in options ? (options.volumeValue ?? null) : "750 mL",
+      ),
       addressQualification: textField(null),
       barcode: textField(null),
       lotCode: textField(null),
