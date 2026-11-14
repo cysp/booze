@@ -59,15 +59,17 @@ export async function requireAuthenticatedUser({
     throw new HTTPException(401, { message: "Authentication required" });
   }
 
+  let clerkUserId: string;
   try {
     const payload = await verifyToken(token, { secretKey });
     if (payload.sub === undefined || payload.sub === "") {
       throw new Error("Clerk token did not include a subject");
     }
-    return await ensureAuthenticatedClerkUser({ database, clerkUserId: payload.sub });
+    clerkUserId = payload.sub;
   } catch {
     throw new HTTPException(401, { message: "Authentication required" });
   }
+  return ensureAuthenticatedClerkUser({ database, clerkUserId });
 }
 
 function tokenForRequest({
