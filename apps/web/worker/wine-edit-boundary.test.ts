@@ -33,7 +33,7 @@ function setup() {
     .onError(problemResponseForError);
   const d1 = asD1(sqlite);
   const item = inventoryItemFixture({
-    bottleId: "one",
+    id: "one",
     siteId: "site",
     wineVintageId: "wine",
     wineryId: "winery",
@@ -46,8 +46,8 @@ function setup() {
     vintageStatus: "unknown",
     vintageLabel: "Unknown",
     wineBottleCount: 2,
-    locationId: null,
-    grapeVarieties: "Shiraz",
+    storageLocationId: null,
+    grapeVarieties: ["Shiraz"],
     region: null,
   });
   return {
@@ -115,7 +115,7 @@ await it("keeps the MCP base name coherent after designation correction", async 
 await it("keeps new grape measurements unknown and leaves the source composition intact", async () => {
   const { sqlite, item, request } = setup();
   const form = formStateForItem(item);
-  form.grapeVarieties = "Cabernet Sauvignon";
+  form.grapeVarieties = ["Cabernet Sauvignon"];
   const response = await request(
     bottleEditPayload({ form, wineEditScope: "bottle", awards: [], criticReviews: [] }, item),
   );

@@ -128,7 +128,11 @@ describe("BottleModal destructive actions", () => {
 
   it("does not offer a position note until a storage location is chosen", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture({ locationId: null, location: null, position: null });
+    const item = inventoryItemFixture({
+      storageLocationId: null,
+      storageLocationName: null,
+      positionHint: null,
+    });
     render(
       <BottleModal
         form={formStateForItem(item)}
@@ -375,7 +379,7 @@ describe("BottleModal wine identity", () => {
           ...initialFormState,
           siteId: "site-owner",
           wineryName: "RIKARD",
-          grapeVarieties: "Shiraz",
+          grapeVarieties: ["Shiraz"],
         }}
         isSaving={false}
         locations={locationsFixture}

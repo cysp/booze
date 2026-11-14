@@ -100,8 +100,8 @@ export function CaptureArea({
     }
     setForm({
       ...form,
-      siteId: site.siteId,
-      site: site.site,
+      siteId: site.id,
+      site: site.name,
       storageLocationId: "",
       location: "",
     });

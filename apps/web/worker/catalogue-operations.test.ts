@@ -72,6 +72,107 @@ function audits(sqlite: ReturnType<typeof migratedDatabase>) {
 }
 
 await describe("complete bottle operations", async () => {
+  await it("rejects invalid direct addition and edit inputs before changing stock or audit", async () => {
+    const invalidAdditions: readonly Partial<z.infer<typeof createBottleSchema>>[] = [
+      ...[0, 25, 1.5, Infinity].map((quantity) => ({ quantity })),
+      ...[0, 30_001, 750.5, Number.NaN].map((volumeMl) => ({ bottle: { volumeMl } })),
+      { wine: { wineryName: "Producer", designation: "New wine", alcoholPercent: 101 } },
+      {
+        wine: {
+          wineryName: "Producer",
+          designation: "New wine",
+          vintageYear: 2020,
+          vintageStatus: "unknown",
+        },
+      },
+      {
+        wine: {
+          wineryName: "Producer",
+          designation: "New wine",
+          drinkFromYear: 2030,
+          drinkToYear: 2020,
+        },
+      },
+    ];
+    for (const invalid of invalidAdditions) {
+      const { sqlite, context } = setup();
+      try {
+        await assert.rejects(
+          addBottles(context, {
+            operationId: crypto.randomUUID(),
+            siteId: "site",
+            quantity: 1,
+            wine: { wineryName: "Producer", designation: "New wine" },
+            bottle: {},
+            ...invalid,
+          }),
+        );
+        assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 1);
+        assert.equal(
+          sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"],
+          1,
+        );
+        assert.equal(audits(sqlite).length, 0);
+        await assert.rejects(editBottle(context, "bottle", { bottle: { volumeMl: 0 } }));
+        assert.equal(sqlite.prepare("SELECT volume_ml FROM bottles").get()?.["volume_ml"], 750);
+        assert.equal(audits(sqlite).length, 0);
+      } finally {
+        sqlite.close();
+      }
+    }
+  });
+
+  await it("clears nullable wine facts explicitly and preserves omitted facts in shared corrections", async () => {
+    const { sqlite, context } = setup();
+    try {
+      sqlite.exec(
+        "UPDATE wine_vintages SET vintage_year = 2020, vintage_status = 'year', vintage_label = '2020', alcohol_percent = 14.5, drink_from_year = 2025, drink_to_year = 2035, region = 'Original region'",
+      );
+      await editBottle(context, "bottle", {
+        wineEditScope: "shared",
+        expectedWineVintageId: "wine",
+        expectedAffectedBottleCount: 1,
+        wine: {
+          vintageYear: null,
+          vintageStatus: "unknown",
+          alcoholPercent: null,
+          drinkFromYear: null,
+          drinkToYear: null,
+          notes: null,
+        },
+      });
+      assert.deepEqual(
+        {
+          ...sqlite
+            .prepare(
+              "SELECT vintage_year, vintage_status, alcohol_percent, drink_from_year, drink_to_year, notes, region FROM wine_vintages",
+            )
+            .get(),
+        },
+        {
+          vintage_year: null,
+          vintage_status: "unknown",
+          alcohol_percent: null,
+          drink_from_year: null,
+          drink_to_year: null,
+          notes: null,
+          region: "Original region",
+        },
+      );
+      await assert.rejects(
+        editBottle(context, "bottle", {
+          wineEditScope: "shared",
+          expectedWineVintageId: "wine",
+          expectedAffectedBottleCount: 1,
+          wine: { drinkFromYear: 2030 },
+        }),
+      );
+      assert.equal(audits(sqlite).length, 1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("rejects a move when consumption commits after preparation and before its transaction", async () => {
     const { sqlite, context, independentContext, interleave } = setup();
     interleave(async () => {

@@ -88,6 +88,7 @@ export const captures = [
     latestRun: null,
     reviewCandidate: null,
     reviewRevision: 0,
+    workflowInstanceId: null,
     positionHint: null,
     quantity: 1,
     siteId: "site-owner",

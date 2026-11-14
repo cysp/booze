@@ -1,4 +1,9 @@
-import type { BottleInput, WineInput } from "./api/catalogue.ts";
+import {
+  catalogueCandidateSchema,
+  type BottleInput,
+  type CandidateValidationIssue,
+  type WineInput,
+} from "../shared/catalogue-inputs.ts";
 import {
   BottleOcrError,
   combineBottleLabelEvidence,
@@ -20,6 +25,7 @@ export type ImportCandidate = {
   readonly wine: WineInput;
   readonly bottle: BottleInput;
   readonly rawSuggestion: unknown;
+  readonly validationIssues?: readonly CandidateValidationIssue[] | undefined;
 };
 
 export type CaptureImportReviewDecision =
@@ -121,9 +127,22 @@ export function buildCaptureImportCandidate({
   readonly reviewDecision: CaptureImportReviewDecision;
 } {
   const suggestion = suggestionFromBottleCombination({ combined, extractors });
+  const candidate = candidateFromSuggestion(suggestion, combined.canonical_fields.vintage.value);
+  const decision = decideCaptureImport({ combined, extractors });
+  const reasons = [
+    ...decision.reasons,
+    ...(candidate.validationIssues ?? []).map(
+      (issue) => `${issue.path}: ${issue.message} Label value: ${JSON.stringify(issue.rawValue)}.`,
+    ),
+  ];
   return {
-    ...importCandidateFromSuggestion(suggestion),
-    reviewDecision: decideCaptureImport({ combined, extractors }),
+    candidate,
+    imageText: suggestion.structuredExtraction ?? suggestion,
+    model: "multi-extractor-combiner",
+    reviewDecision:
+      reasons.length === 0
+        ? { kind: "auto_import", reasons: [] }
+        : { kind: "needs_review", reason: "ocr_human_review_required", reasons },
   };
 }
 
@@ -219,33 +238,30 @@ export async function captureImageContent({
   return content;
 }
 
-function importCandidateFromSuggestion(suggestion: BottleOcrSuggestion): {
-  readonly candidate: ImportCandidate;
-  readonly imageText: unknown;
-  readonly model: string;
-} {
-  return {
-    candidate: candidateFromSuggestion(suggestion),
-    imageText: suggestion.structuredExtraction ?? suggestion,
-    model: "multi-extractor-combiner",
-  };
-}
-
-function candidateFromSuggestion(suggestion: BottleOcrSuggestion): ImportCandidate {
+function candidateFromSuggestion(
+  suggestion: BottleOcrSuggestion,
+  vintageLabel: string | null,
+): ImportCandidate {
+  const validationIssues: CandidateValidationIssue[] = [];
   const wineryName = text(suggestion.wineryName) ?? "";
   const displayName = text(suggestion.displayName) ?? "";
-
-  return {
+  const vintageYear = normalizedNumber(
+    vintageLabel,
+    "wine.vintageYear",
+    validationIssues,
+    parseYear,
+  );
+  const candidate: ImportCandidate = {
     wine: {
       wineryName,
       brandName: text(suggestion.brandName) ?? undefined,
       baseName: displayName,
       designation: displayName,
       displayName,
-      vintageYear: parseYear(suggestion.vintageYear),
+      vintageYear,
       vintageStatus:
-        parseYear(suggestion.vintageYear) === undefined
-          ? suggestion.vintageYear === "NV"
+        vintageYear === undefined
+          ? isNonVintage(vintageLabel)
             ? "non_vintage"
             : "unknown"
           : "year",
@@ -257,9 +273,24 @@ function candidateFromSuggestion(suggestion: BottleOcrSuggestion): ImportCandida
       wineType: text(suggestion.wineType) ?? "",
       wineColor: text(suggestion.wineColor) ?? "",
       addressQualification: text(suggestion.addressQualification) ?? "",
-      alcoholPercent: parseDecimal(suggestion.alcoholPercent),
-      drinkFromYear: parseYear(suggestion.drinkFromYear),
-      drinkToYear: parseYear(suggestion.drinkToYear),
+      alcoholPercent: normalizedNumber(
+        suggestion.alcoholPercent,
+        "wine.alcoholPercent",
+        validationIssues,
+        parseAlcoholPercent,
+      ),
+      drinkFromYear: normalizedNumber(
+        suggestion.drinkFromYear,
+        "wine.drinkFromYear",
+        validationIssues,
+        parseYear,
+      ),
+      drinkToYear: normalizedNumber(
+        suggestion.drinkToYear,
+        "wine.drinkToYear",
+        validationIssues,
+        parseYear,
+      ),
       description: text(suggestion.description) ?? "",
       drinkingAdvice: text(suggestion.drinkingAdvice) ?? "",
       labelText: text(suggestion.labelText) ?? "",
@@ -267,11 +298,38 @@ function candidateFromSuggestion(suggestion: BottleOcrSuggestion): ImportCandida
       notes: text(suggestion.wineNotes) ?? "",
     },
     bottle: {
-      volumeMl: parseVolumeMl(suggestion.bottleVolumeMl),
+      volumeMl: normalizedNumber(
+        suggestion.bottleVolumeMl,
+        "bottle.volumeMl",
+        validationIssues,
+        parseVolumeMl,
+      ),
       barcode: text(suggestion.barcode) ?? "",
       lotCode: text(suggestion.lotCode) ?? "",
     },
     rawSuggestion: suggestion,
+  };
+  return validateNormalizedCandidate(candidate, validationIssues);
+}
+
+function validateNormalizedCandidate(
+  candidate: ImportCandidate,
+  validationIssues: CandidateValidationIssue[],
+): ImportCandidate {
+  const validated = catalogueCandidateSchema.safeParse(candidate);
+  if (!validated.success) {
+    validationIssues.push(
+      ...validated.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        rawValue: JSON.stringify(issue.path[0] === "bottle" ? candidate.bottle : candidate.wine),
+        message: issue.message,
+      })),
+    );
+  }
+  return {
+    ...candidate,
+    ...(validated.success ? validated.data : {}),
+    ...(validationIssues.length === 0 ? {} : { validationIssues }),
   };
 }
 
@@ -349,33 +407,76 @@ function text(value: string | undefined): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-function parseYear(value: string | undefined): number | undefined {
-  const matched = value?.match(/\b(18|19|20|21|22)\d{2}\b/u);
-  if (matched === undefined || matched === null) {
-    return undefined;
-  }
-  const year = Math.trunc(Number(matched[0]));
-  return Number.isNaN(year) ? undefined : year;
+function isNonVintage(value: string | null): boolean {
+  return value !== null && /^(?:n[.\s]?v[.]?|non[ -]?vintage)$/iu.test(value.trim());
 }
 
-function parseDecimal(value: string | undefined): number | undefined {
-  const matched = value?.match(/\d+(?:\.\d+)?/u);
-  if (matched === undefined || matched === null) {
-    return undefined;
+function normalizedNumber(
+  value: string | null | undefined,
+  path: string,
+  issues: CandidateValidationIssue[],
+  parse: (value: string) => number | undefined,
+): number | undefined {
+  if (value === undefined || value === null || value.trim() === "") return undefined;
+  if (path === "wine.vintageYear" && isNonVintage(value)) return undefined;
+  const normalized = parse(value.trim());
+  if (normalized === undefined) {
+    issues.push({
+      path,
+      rawValue: value,
+      message:
+        path === "bottle.volumeMl"
+          ? "Enter an unambiguous metric volume in mL, cL, or L, with a whole number of millilitres between 1 and 30000."
+          : path === "wine.alcoholPercent"
+            ? "Enter an unambiguous alcohol percentage between 0 and 100."
+            : "Enter one complete year between 1800 and 2200, or an explicit non-vintage label.",
+    });
   }
-  const decimal = Number(matched[0]);
-  return Number.isNaN(decimal) ? undefined : decimal;
+  return normalized;
 }
 
-function parseVolumeMl(value: string | undefined): number | undefined {
-  const decimal = parseDecimal(value);
-  if (decimal === undefined) {
-    return undefined;
-  }
-  if (value?.toLowerCase().includes("l") === true && !value.toLowerCase().includes("ml")) {
-    return Math.round(decimal * 1000);
-  }
-  return Math.round(decimal);
+function parseYear(value: string): number | undefined {
+  return /^(?:18|19|20|21)\d{2}$|^2200$/u.test(value) ? Number(value) : undefined;
+}
+
+function decimalRatio(
+  value: string,
+): { readonly numerator: bigint; readonly denominator: bigint } | undefined {
+  const match = /^(\d+)(?:[.,](\d+))?$/u.exec(value);
+  const whole = match?.[1];
+  if (whole === undefined) return undefined;
+  const fraction = match?.[2] ?? "";
+  // A three-digit suffix after a nonzero integer may be a grouping separator.
+  if (fraction.length === 3 && !/^0+$/u.test(whole)) return undefined;
+  return { numerator: BigInt(`${whole}${fraction}`), denominator: 10n ** BigInt(fraction.length) };
+}
+
+function parseAlcoholPercent(value: string): number | undefined {
+  const match = /^(\d+(?:[.,]\d+)?)\s*(?:%\s*(?:vol\.?|abv)?)?$/iu.exec(value);
+  const ratio = match?.[1] === undefined ? undefined : decimalRatio(match[1]);
+  if (ratio === undefined) return undefined;
+  const percent = Number(ratio.numerator) / Number(ratio.denominator);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : undefined;
+}
+
+function parseVolumeMl(value: string): number | undefined {
+  const match =
+    /^(\d+(?:[.,]\d+)?)\s*(ml|cl|l|millilit(?:re|er)s?|centilit(?:re|er)s?|lit(?:re|er)s?)$/iu.exec(
+      value,
+    );
+  const ratio = match?.[1] === undefined ? undefined : decimalRatio(match[1]);
+  const unit = match?.[2]?.toLowerCase();
+  if (ratio === undefined || unit === undefined) return undefined;
+  const multiplier =
+    unit === "ml" || unit.startsWith("milli")
+      ? 1n
+      : unit === "cl" || unit.startsWith("centi")
+        ? 10n
+        : 1000n;
+  const scaled = ratio.numerator * multiplier;
+  if (scaled % ratio.denominator !== 0n) return undefined;
+  const volume = scaled / ratio.denominator;
+  return volume >= 1n && volume <= 30_000n ? Number(volume) : undefined;
 }
 
 function grapeVarietiesFromText(value: string | undefined): readonly string[] {

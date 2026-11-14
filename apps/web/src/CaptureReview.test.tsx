@@ -235,3 +235,40 @@ it("adopts evidence arriving later for the same run when the draft is clean", ()
   rerender(<CaptureReview {...common} capture={captureFixture({ latestRun: run })} />);
   expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue("Rowlee");
 });
+
+it("preserves literal grape names while saving other capture corrections", async () => {
+  const user = userEvent.setup();
+  const grapeVarieties = ["Grenache (Garnacha, Alicante)", 'Muscat "Blanc"', "日本の品種"];
+  const onSaveReview = vi.fn(
+    async (_id: string, reviewRevision: number, reviewCandidate: CaptureReviewCandidate) => ({
+      ok: true as const,
+      reviewRevision: reviewRevision + 1,
+      reviewCandidate,
+    }),
+  );
+  render(
+    <CaptureReview
+      wines={[]}
+      capture={captureFixture({
+        reviewRevision: 2,
+        reviewCandidate: {
+          wine: { wineryName: "Estate", designation: "", grapeVarieties },
+          bottle: { volumeMl: 1500 },
+        },
+      })}
+      canWrite
+      disabled={false}
+      onDirtyChange={vi.fn<(dirty: boolean) => void>()}
+      onBusyChange={vi.fn<(busy: boolean) => void>()}
+      onImport={async () => ({ ok: true })}
+      onSaveReview={onSaveReview}
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "Grape variety 1" })).toHaveValue(grapeVarieties[0]);
+  await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), " corrected");
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(onSaveReview).toHaveBeenCalledOnce();
+  expect(onSaveReview.mock.calls[0]?.slice(0, 2)).toEqual(["capture-1", 2]);
+  expect(onSaveReview.mock.calls[0]?.[2].wine.grapeVarieties).toEqual(grapeVarieties);
+  expect(onSaveReview.mock.calls[0]?.[2].bottle.volumeMl).toBe(1500);
+});

@@ -16,7 +16,6 @@ import { z } from "zod";
 
 import type { BottleResource, BottleWithDrinkStatus, DrinkStatus } from "../api/inventory.ts";
 import { withDrinkStatus } from "../api/inventory.ts";
-import { mcpEntityId } from "./ids.ts";
 import { listStorageLocationDisplayNames } from "./catalogue.ts";
 import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
 import type {
@@ -173,7 +172,7 @@ async function listBottleSummaryRows({
   const grapeVarietiesByWine = database
     .select({
       wineVintageId: wineConstituents.wineVintageId,
-      grapeVarieties: sql<string | null>`group_concat(${grapeVarieties.name})`.as(
+      grapeVarieties: sql<string | null>`json_group_array(${grapeVarieties.name})`.as(
         "grape_varieties",
       ),
     })
@@ -356,9 +355,7 @@ function bottleResourceFromRow(row: {
     awards: [],
     criticReviews: [],
     grapeVarieties:
-      row.grapeVarieties === null
-        ? []
-        : row.grapeVarieties.split(",").filter((value) => value !== ""),
+      row.grapeVarieties === null ? [] : z.array(z.string()).parse(JSON.parse(row.grapeVarieties)),
   };
 }
 
@@ -407,16 +404,15 @@ export function summarizeBottle({
       bottle.storageLocationId === null
         ? null
         : (storageLocationsById.get(bottle.storageLocationId) ?? bottle.storageLocationName),
-    storageLocationId:
-      bottle.storageLocationId === null ? null : mcpEntityId("location", bottle.storageLocationId),
+    storageLocationId: bottle.storageLocationId,
     vintageLabel: bottle.vintageLabel,
     vintageYear: bottle.vintageYear,
     wine: bottle.displayName,
     wineColor: bottle.wineColor,
     wineType: bottle.wineType,
-    wineId: mcpEntityId("wine", bottle.wineVintageId),
+    wineId: bottle.wineVintageId,
     winery: bottle.wineryName,
-    wineryId: bottle.wineryId === null ? null : mcpEntityId("winery", bottle.wineryId),
+    wineryId: bottle.wineryId,
   };
 }
 
@@ -459,8 +455,7 @@ export function bottleDetail({
       bottle.storageLocationId === null
         ? null
         : (storageLocationsById.get(bottle.storageLocationId) ?? bottle.storageLocationName),
-    storageLocationId:
-      bottle.storageLocationId === null ? null : mcpEntityId("location", bottle.storageLocationId),
+    storageLocationId: bottle.storageLocationId,
     vintageLabel: bottle.vintageLabel,
     vintageYear: bottle.vintageYear,
     volumeMl: bottle.volumeMl,
@@ -468,8 +463,8 @@ export function bottleDetail({
     wineColor: bottle.wineColor,
     wineNotes: bottle.wineNotes,
     wineType: bottle.wineType,
-    wineId: mcpEntityId("wine", bottle.wineVintageId),
+    wineId: bottle.wineVintageId,
     winery: bottle.wineryName,
-    wineryId: bottle.wineryId === null ? null : mcpEntityId("winery", bottle.wineryId),
+    wineryId: bottle.wineryId,
   };
 }

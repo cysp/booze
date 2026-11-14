@@ -60,14 +60,14 @@ it("persists the review snapshot with its revision and returns the confirmed ser
     }),
   );
   await act(async () => {
-    expect(await result.current.saveCaptureReview("capture", 2, candidate)).toEqual({
+    expect(await result.current.saveCaptureReview("capture # / ? % ID", 2, candidate)).toEqual({
       ok: true,
       reviewCandidate: candidate,
       reviewRevision: 3,
     });
   });
   expect(fetchMock).toHaveBeenCalledWith(
-    "/api/bottle-captures/capture/review",
+    "/api/bottle-captures/capture%20%23%20%2F%20%3F%20%25%20ID/review",
     expect.objectContaining({
       method: "PATCH",
       body: JSON.stringify({ expectedRevision: 2, candidate }),

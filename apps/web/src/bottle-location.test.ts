@@ -17,15 +17,15 @@ describe("bottle location selection", () => {
       return;
     }
 
-    expect(resolveBottleLocation(`site:${site.siteId}`, sitesFixture, locationsFixture)).toEqual({
+    expect(resolveBottleLocation(`site:${site.id}`, sitesFixture, locationsFixture)).toEqual({
       location: "",
-      site: site.site,
-      siteId: site.siteId,
+      site: site.name,
+      siteId: site.id,
       storageLocationId: "",
     });
-    expect(
-      bottleLocationValue(location.siteId, location.locationId, sitesFixture, locationsFixture),
-    ).toBe(`location:${location.locationId}`);
+    expect(bottleLocationValue(location.siteId, location.id, sitesFixture, locationsFixture)).toBe(
+      `location:${location.id}`,
+    );
   });
 
   it("fails closed for an unknown or malformed value", () => {

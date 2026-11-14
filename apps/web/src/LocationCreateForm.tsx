@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import {
   compareLocationPath,
-  locationPath,
+  locationLabel,
+  siteLabel,
   type LocationFormState,
   type LocationItem,
   type SiteItem,
@@ -37,9 +38,7 @@ export function LocationCreateForm({
         .toSorted(compareLocationPath(locations)),
     [form.siteId, locations],
   );
-  const parentLocationId = siteLocations.some(
-    (location) => location.locationId === form.parentLocationId,
-  )
+  const parentLocationId = siteLocations.some((location) => location.id === form.parentLocationId)
     ? form.parentLocationId
     : "";
 
@@ -88,14 +87,14 @@ export function LocationCreateForm({
           htmlName="siteId"
           isRequired
           label="Site"
-          options={sites.map((site) => ({ label: site.site, value: site.siteId }))}
+          options={sites.map((site) => ({ label: siteLabel(site, sites), value: site.id }))}
           placeholder={sites.length === 0 ? "Create a site first" : "Select site"}
           {...(siteError === null ? {} : { status: { message: siteError, type: "error" } })}
           value={form.siteId}
           onChange={(value: string) => {
-            const site = sites.find((candidate) => candidate.siteId === value);
-            updateLocationField("siteId", site?.siteId ?? "");
-            updateLocationField("site", site?.site ?? "");
+            const site = sites.find((candidate) => candidate.id === value);
+            updateLocationField("siteId", site?.id ?? "");
+            updateLocationField("site", site?.name ?? "");
             updateLocationField("parentLocationId", "");
             setSiteError(null);
           }}
@@ -108,8 +107,8 @@ export function LocationCreateForm({
           isDisabled={form.siteId === ""}
           label="Inside"
           options={siteLocations.map((location) => ({
-            label: locationPath(location, locations),
-            value: location.locationId,
+            label: locationLabel(location, locations),
+            value: location.id,
           }))}
           placeholder="Top level"
           value={parentLocationId}

@@ -10,6 +10,8 @@ import { DestructiveActionDialog } from "./DestructiveActionDialog.tsx";
 import {
   compareLocationPath,
   locationPath,
+  locationLabel,
+  siteLabel,
   type LocationFormState,
   type LocationItem,
   type SiteFormState,
@@ -108,7 +110,7 @@ function LocationArea({
       <LocationCreateForm
         form={form}
         locations={locations}
-        sites={sites.filter((site) => writableSiteIds.has(site.siteId))}
+        sites={sites.filter((site) => writableSiteIds.has(site.id))}
         updateLocationField={updateLocationField}
         onSaveLocation={onSaveLocation}
       />
@@ -123,23 +125,23 @@ function LocationArea({
           {visibleLocations.map((location) => (
             <article
               className="location-card"
-              data-location-id={location.locationId}
-              key={location.locationId}
+              data-location-id={location.id}
+              key={location.id}
               tabIndex={-1}
             >
-              {editor?.id === location.locationId ? (
+              {editor?.id === location.id ? (
                 <form
                   className="inline-edit"
                   onSubmit={(event) => {
                     event.preventDefault();
                     if (editor.name.trim() === "") {
-                      rename.reportError(location.locationId, "Location name is required.");
+                      rename.reportError(location.id, "Location name is required.");
                       return;
                     }
                     if (rename.pendingKey !== null) {
                       return;
                     }
-                    void rename.run(location.locationId, saveRename);
+                    void rename.run(location.id, saveRename);
                   }}
                 >
                   <TextInput
@@ -147,7 +149,7 @@ function LocationArea({
                     htmlName="locationName"
                     isRequired
                     label="Location display name"
-                    {...(rename.error?.key === location.locationId
+                    {...(rename.error?.key === location.id
                       ? { status: { message: rename.error.message, type: "error" } }
                       : {})}
                     value={editor.name}
@@ -158,7 +160,7 @@ function LocationArea({
                   />
                   <div className="card-actions">
                     <Button
-                      isLoading={rename.pendingKey === location.locationId}
+                      isLoading={rename.pendingKey === location.id}
                       label="Save"
                       type="submit"
                       variant="primary"
@@ -169,8 +171,8 @@ function LocationArea({
               ) : (
                 <>
                   <div>
-                    <h3>{locationPath(location, locations)}</h3>
-                    <p>{location.site}</p>
+                    <h3>{locationLabel(location, locations)}</h3>
+                    <p>{location.siteName}</p>
                   </div>
                   <dl>
                     <div>
@@ -190,7 +192,7 @@ function LocationArea({
                         label="Edit"
                         variant="ghost"
                         onClick={() => {
-                          beginRename(location.locationId, location.location);
+                          beginRename(location.id, location.name);
                         }}
                       />
                       <Button
@@ -212,7 +214,7 @@ function LocationArea({
       <ProgressiveListStatus
         getRevealFocusTarget={(firstRevealedIndex) => {
           const location = sortedLocations[firstRevealedIndex];
-          return location === undefined ? null : locationCard(location.locationId);
+          return location === undefined ? null : locationCard(location.id);
         }}
         itemLabel="locations"
         totalCount={sortedLocations.length}
@@ -222,13 +224,13 @@ function LocationArea({
       {deletingLocation === null ? null : (
         <DestructiveActionDialog
           actionLabel="Delete location"
-          description={`Bottles in ${locationPath(deletingLocation, locations)} will remain in ${deletingLocation.site} without a storage location. This action cannot be undone.`}
+          description={`Bottles in ${locationPath(deletingLocation, locations)} will remain in ${deletingLocation.siteName} without a storage location. This action cannot be undone.`}
           fallbackFocus={() => sectionHeadingRef.current}
           failureMessage="Location was not deleted. Try again."
           isOpen
           returnFocusRef={deleteTriggerRef}
-          title={`Delete ${deletingLocation.location}?`}
-          onAction={async () => remove(deletingLocation.locationId)}
+          title={`Delete ${deletingLocation.name}?`}
+          onAction={async () => remove(deletingLocation.id)}
           onOpenChange={(isOpen: boolean) => {
             if (!isOpen) {
               setDeletingLocation(null);
@@ -332,25 +334,20 @@ function SiteArea({
       ) : (
         <div className="location-grid">
           {visibleSites.map((site) => (
-            <article
-              className="location-card"
-              data-site-id={site.siteId}
-              key={site.siteId}
-              tabIndex={-1}
-            >
-              {editor?.id === site.siteId ? (
+            <article className="location-card" data-site-id={site.id} key={site.id} tabIndex={-1}>
+              {editor?.id === site.id ? (
                 <form
                   className="inline-edit"
                   onSubmit={(event) => {
                     event.preventDefault();
                     if (editor.name.trim() === "") {
-                      rename.reportError(site.siteId, "Site name is required.");
+                      rename.reportError(site.id, "Site name is required.");
                       return;
                     }
                     if (rename.pendingKey !== null) {
                       return;
                     }
-                    void rename.run(site.siteId, saveRename);
+                    void rename.run(site.id, saveRename);
                   }}
                 >
                   <TextInput
@@ -358,7 +355,7 @@ function SiteArea({
                     htmlName="siteName"
                     isRequired
                     label="Site display name"
-                    {...(rename.error?.key === site.siteId
+                    {...(rename.error?.key === site.id
                       ? { status: { message: rename.error.message, type: "error" } }
                       : {})}
                     value={editor.name}
@@ -369,7 +366,7 @@ function SiteArea({
                   />
                   <div className="card-actions">
                     <Button
-                      isLoading={rename.pendingKey === site.siteId}
+                      isLoading={rename.pendingKey === site.id}
                       label="Save"
                       type="submit"
                       variant="primary"
@@ -380,7 +377,7 @@ function SiteArea({
               ) : (
                 <>
                   <div>
-                    <h3>{site.site}</h3>
+                    <h3>{siteLabel(site, sites)}</h3>
                     <p>
                       <Badge label={site.role} variant="neutral" />
                     </p>
@@ -400,7 +397,7 @@ function SiteArea({
                       <Button
                         label="Edit"
                         onClick={() => {
-                          beginRename(site.siteId, site.site);
+                          beginRename(site.id, site.name);
                         }}
                       />
                       <Button
@@ -422,7 +419,7 @@ function SiteArea({
       <ProgressiveListStatus
         getRevealFocusTarget={(firstRevealedIndex) => {
           const site = sites[firstRevealedIndex];
-          return site === undefined ? null : siteCard(site.siteId);
+          return site === undefined ? null : siteCard(site.id);
         }}
         itemLabel="sites"
         totalCount={sites.length}
@@ -437,8 +434,8 @@ function SiteArea({
           failureMessage="Site was not deleted. Try again."
           isOpen
           returnFocusRef={deleteTriggerRef}
-          title={`Delete ${deletingSite.site}?`}
-          onAction={async () => remove(deletingSite.siteId)}
+          title={`Delete ${deletingSite.name}?`}
+          onAction={async () => remove(deletingSite.id)}
           onOpenChange={(isOpen: boolean) => {
             if (!isOpen) {
               setDeletingSite(null);

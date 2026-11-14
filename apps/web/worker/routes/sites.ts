@@ -1,3 +1,4 @@
+// oxlint-disable import/max-dependencies -- Site routes compose authorization, resource contracts, persistence, and durable deletion.
 import {
   bottles,
   createD1Client,
@@ -10,6 +11,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
+import { siteResourceSchema, type SiteResource } from "../../shared/catalogue-resources.ts";
 
 import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../api/auth.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
@@ -56,7 +58,7 @@ export const siteRoutes = new Hono<{ Bindings: Bindings }>()
 
     return created(
       { id: result.siteId, name: payload.name },
-      locationHeader(`/api/sites/${result.siteId}`),
+      locationHeader(`/api/sites/${encodeURIComponent(result.siteId)}`),
     );
   })
   .patch("/sites/:siteId", async (context) => {
@@ -118,15 +120,7 @@ async function listSites({
 }: {
   readonly database: BoozeDatabase;
   readonly userId: string;
-}): Promise<
-  readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly bottleCount: number;
-    readonly locationCount: number;
-    readonly role: string;
-  }[]
-> {
+}): Promise<readonly SiteResource[]> {
   const bottleCountsBySite = database
     .select({
       siteId: bottles.siteId,
@@ -160,8 +154,8 @@ async function listSites({
     .where(eq(siteMemberships.userId, userId))
     .orderBy(asc(sites.name));
 
-  if (!Array.isArray(rows)) {
-    throw new HTTPException(500, { message: "Could not list sites" });
-  }
-  return rows;
+  const result = siteResourceSchema.array().safeParse(rows);
+  if (!result.success)
+    throw new Error("Stored sites do not match the resource contract", { cause: result.error });
+  return result.data;
 }
