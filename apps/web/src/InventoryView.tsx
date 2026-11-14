@@ -1,11 +1,10 @@
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { Link } from "@astryxdesign/core/Link";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import type { ReactElement } from "react";
 
 import {
   bottleTitle,
@@ -18,18 +17,22 @@ import {
   locationLabel,
   wineOrigin,
   type InventoryGrouping,
-  type InventoryItem,
+  type InventorySummaryItem,
   type LocationItem,
 } from "./inventory-model.ts";
-import { ProgressiveListStatus } from "./ProgressiveListStatus.tsx";
+import { ReadPageStatus } from "./ReadPageStatus.tsx";
 
 type InventoryAreaProps = {
   readonly drinkStatusFilter: string;
   readonly drinkStatusOptions: readonly SelectOption[];
   readonly filter: string;
   readonly grouping: InventoryGrouping;
-  readonly items: readonly InventoryItem[];
+  readonly items: readonly InventorySummaryItem[];
   readonly isLoading?: boolean;
+  readonly totalCount?: number;
+  readonly hasMore?: boolean;
+  readonly isLoadingMore?: boolean;
+  readonly onLoadMore?: () => Promise<unknown>;
   readonly onCreateSite?: (() => void) | undefined;
   readonly editableSiteIds: ReadonlySet<string>;
   readonly storageLocationIdFilter: string;
@@ -46,7 +49,7 @@ type InventoryAreaProps = {
   readonly setStorageLocationIdFilter: (value: string) => void;
   readonly setVarietalFilter: (value: string) => void;
   readonly onAddBottle: () => void;
-  readonly onEditBottle: (item: InventoryItem) => void;
+  readonly onEditBottle: (item: InventorySummaryItem) => void;
 };
 
 type SelectOption = {
@@ -56,11 +59,9 @@ type SelectOption = {
 
 type WineRow = {
   readonly bottleCount: number;
-  readonly bottles: readonly InventoryItem[];
-  readonly item: InventoryItem;
+  readonly bottles: readonly InventorySummaryItem[];
+  readonly item: InventorySummaryItem;
 };
-
-const INVENTORY_PAGE_SIZE = 100;
 
 export function InventoryArea({
   drinkStatusFilter,
@@ -69,6 +70,12 @@ export function InventoryArea({
   grouping,
   items,
   isLoading = false,
+  totalCount = items.length,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore = async () => {
+    /* No further pages for standalone inventory renderers. */
+  },
   onCreateSite,
   editableSiteIds,
   storageLocationIdFilter,
@@ -87,13 +94,6 @@ export function InventoryArea({
   onAddBottle,
   onEditBottle,
 }: InventoryAreaProps): ReactElement {
-  const [visibleItemCount, setVisibleItemCount] = useState(INVENTORY_PAGE_SIZE);
-  const visibleItems = useMemo(() => items.slice(0, visibleItemCount), [items, visibleItemCount]);
-
-  useEffect(() => {
-    setVisibleItemCount(INVENTORY_PAGE_SIZE);
-  }, [drinkStatusFilter, filter, grouping, storageLocationIdFilter, siteIdFilter, varietalFilter]);
-
   return (
     <section className="workspace" aria-labelledby="inventory-title">
       <div className="workspace-header">
@@ -203,28 +203,29 @@ export function InventoryArea({
       ) : grouping === "winery" ? (
         <WineryInventory
           editableSiteIds={editableSiteIds}
-          items={visibleItems}
+          items={items}
           locations={locations}
           onEditBottle={onEditBottle}
         />
       ) : (
         <StorageInventory
           editableSiteIds={editableSiteIds}
-          items={visibleItems}
+          items={items}
           locations={locations}
           onEditBottle={onEditBottle}
         />
       )}
-      <ProgressiveListStatus
+      <ReadPageStatus
         getRevealFocusTarget={(firstRevealedIndex) => {
           const item = items[firstRevealedIndex];
           return item === undefined ? null : inventoryCardForBottle(item.id);
         }}
         itemLabel="bottles"
-        pageSize={INVENTORY_PAGE_SIZE}
-        totalCount={items.length}
-        visibleCount={visibleItems.length}
-        onReveal={setVisibleItemCount}
+        totalCount={totalCount}
+        visibleCount={items.length}
+        hasMore={hasMore}
+        isLoading={isLoadingMore}
+        onLoadMore={onLoadMore}
       />
     </section>
   );
@@ -237,9 +238,9 @@ function WineryInventory({
   onEditBottle,
 }: {
   readonly editableSiteIds: ReadonlySet<string>;
-  readonly items: readonly InventoryItem[];
+  readonly items: readonly InventorySummaryItem[];
   readonly locations: readonly LocationItem[];
-  readonly onEditBottle: (item: InventoryItem) => void;
+  readonly onEditBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const groups = groupBy(
     items,
@@ -280,9 +281,9 @@ function StorageInventory({
   onEditBottle,
 }: {
   readonly editableSiteIds: ReadonlySet<string>;
-  readonly items: readonly InventoryItem[];
+  readonly items: readonly InventorySummaryItem[];
   readonly locations: readonly LocationItem[];
-  readonly onEditBottle: (item: InventoryItem) => void;
+  readonly onEditBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const sites = [
     ...new Map(
@@ -340,16 +341,16 @@ function StorageInventory({
 }
 
 function groupBy(
-  items: readonly InventoryItem[],
-  keyForItem: (item: InventoryItem) => string,
-  labelForItem: (item: InventoryItem) => string,
-  disambiguatorForItem: (item: InventoryItem) => string = keyForItem,
+  items: readonly InventorySummaryItem[],
+  keyForItem: (item: InventorySummaryItem) => string,
+  labelForItem: (item: InventorySummaryItem) => string,
+  disambiguatorForItem: (item: InventorySummaryItem) => string = keyForItem,
 ): readonly {
   readonly key: string;
   readonly label: string;
-  readonly items: readonly InventoryItem[];
+  readonly items: readonly InventorySummaryItem[];
 }[] {
-  const groups = new Map<string, InventoryItem[]>();
+  const groups = new Map<string, InventorySummaryItem[]>();
   for (const item of items) {
     const key = keyForItem(item);
     const group = groups.get(key);
@@ -374,8 +375,8 @@ function groupBy(
     .toSorted((left, right) => left.label.localeCompare(right.label));
 }
 
-function wineRows(items: readonly InventoryItem[]): readonly WineRow[] {
-  const groups = new Map<string, InventoryItem[]>();
+function wineRows(items: readonly InventorySummaryItem[]): readonly WineRow[] {
+  const groups = new Map<string, InventorySummaryItem[]>();
   for (const item of items) {
     const group = groups.get(item.wineVintageId);
     if (group === undefined) {
@@ -401,12 +402,8 @@ function wineRows(items: readonly InventoryItem[]): readonly WineRow[] {
   );
 }
 
-function wineGroupSummary(items: readonly InventoryItem[]): string {
-  const wineCount = wineRows(items).length;
-  const bottleCount = items.length;
-  return wineCount === bottleCount
-    ? countLabel(bottleCount, "bottle")
-    : `${countLabel(wineCount, "wine")} / ${countLabel(bottleCount, "bottle")}`;
+function wineGroupSummary(items: readonly InventorySummaryItem[]): string {
+  return `${countLabel(items.length, "bottle")} shown`;
 }
 
 function countLabel(count: number, singular: string): string {
@@ -422,7 +419,7 @@ function WineCard({
   readonly editable: boolean;
   readonly locations: readonly LocationItem[];
   readonly row: WineRow;
-  readonly onEditBottle: (item: InventoryItem) => void;
+  readonly onEditBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const item = row.item;
   return (
@@ -438,7 +435,7 @@ function WineCard({
         </div>
         <Badge label={drinkLabel(item.drinkStatus)} variant={drinkStatusBadge(item.drinkStatus)} />
         {row.bottleCount === 1 ? null : (
-          <span className="bottle-count">{row.bottleCount} bottles</span>
+          <span className="bottle-count">{row.bottleCount} bottles shown</span>
         )}
       </div>
       <p className="bottle-row-meta">
@@ -455,7 +452,7 @@ function WineCard({
                 <div>
                   <p>{`Bottle ${index + 1} · ${storagePathLabel(bottle, locations)}`}</p>
                   <p className="field-hint">
-                    {[bottleFacts(bottle), bottle.lotCode, bottle.bottleNotes]
+                    {[bottleFacts(bottle), bottle.bottleNumber]
                       .filter((value) => value !== null && value !== "")
                       .join(" · ")}
                   </p>
@@ -484,11 +481,6 @@ function WineCard({
             }}
           />
         ) : null}
-        {item.sourceUrl === null ? null : (
-          <Link isExternalLink href={item.sourceUrl}>
-            Source
-          </Link>
-        )}
       </div>
     </article>
   );
@@ -503,7 +495,7 @@ function inventoryCardForBottle(bottleId: string): HTMLElement | null {
 }
 
 function drinkStatusBadge(
-  status: InventoryItem["drinkStatus"],
+  status: InventorySummaryItem["drinkStatus"],
 ): "neutral" | "info" | "warning" | "error" {
   if (status === "past-window") {
     return "error";
@@ -527,14 +519,14 @@ function wineSubtitle(row: WineRow, locations: readonly LocationItem[]): string 
   return [wineBrandLabel(item), storageLabel].filter((value) => value !== "").join(" - ");
 }
 
-function wineBrandLabel(item: InventoryItem): string {
+function wineBrandLabel(item: InventorySummaryItem): string {
   const brandName = item.brandName?.trim();
   return brandName === undefined || brandName === "" || brandName === item.wineryName
     ? item.wineryName
     : `${item.wineryName} / ${brandName}`;
 }
 
-function storagePathLabel(item: InventoryItem, locations: readonly LocationItem[]): string {
+function storagePathLabel(item: InventorySummaryItem, locations: readonly LocationItem[]): string {
   return [item.siteName, storageLocationPath(item, locations), item.positionHint]
     .filter((value) => value !== null && value !== "")
     .join(" / ");

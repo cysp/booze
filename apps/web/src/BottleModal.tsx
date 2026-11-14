@@ -1,3 +1,5 @@
+import { WineRecordPicker } from "./WineRecordPicker.tsx";
+import type { AuthHeadersProvider } from "./useReadPage.ts";
 import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
 /* oxlint-disable import/max-dependencies -- Bottle editing composes ASTRYX fields, dialogs, and domain adapters. */
 import { Button } from "@astryxdesign/core/Button";
@@ -49,6 +51,7 @@ type BottleModalProps = {
   readonly isSaving: boolean;
   readonly item?: InventoryItem;
   readonly wines?: readonly WineOption[];
+  readonly getAuthHeaders?: AuthHeadersProvider;
   readonly locations: readonly LocationItem[];
   readonly sites: readonly SiteItem[];
   readonly title: string;
@@ -118,7 +121,8 @@ export function BottleModal({
   form,
   isSaving,
   item,
-  wines = [],
+  wines,
+  getAuthHeaders,
   locations,
   sites,
   title,
@@ -301,6 +305,7 @@ export function BottleModal({
             <WineEditControls
               item={item}
               wines={wines}
+              getAuthHeaders={getAuthHeaders}
               values={currentValues}
               wineEditMode={wineEditMode}
               wineVintageId={wineVintageId}
@@ -502,6 +507,7 @@ function SelectedWineSummary({
 function WineEditControls({
   item,
   wines,
+  getAuthHeaders,
   values,
   wineEditMode,
   wineVintageId,
@@ -509,7 +515,8 @@ function WineEditControls({
   setWineVintageId,
 }: {
   readonly item: InventoryItem | undefined;
-  readonly wines: readonly WineOption[];
+  readonly wines: readonly WineOption[] | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider | undefined;
   readonly values: FormState;
   readonly wineEditMode: WineEditMode;
   readonly wineVintageId: string;
@@ -519,9 +526,10 @@ function WineEditControls({
   const wineFacts = wineFactsForForm(values);
   const wineEditable = canEditWine(item, wineEditMode, wineVintageId);
   const needsIdentityConfirmation = wineEditable && !hasWineIdentity(wineFacts);
+  const [selectedWine, setSelectedWine] = useState<WineOption | undefined>();
   const selectableWines = [
     ...new Map(
-      wines
+      (wines ?? [])
         .filter(
           (candidate) =>
             candidate.siteId === values.siteId && candidate.wineVintageId !== item?.wineVintageId,
@@ -555,25 +563,25 @@ function WineEditControls({
         />
       ) : null}
       {item === undefined || wineEditMode === "bottle" ? (
-        <Selector
+        <WineRecordPicker
+          siteId={values.siteId}
+          selected={wineVintageId}
+          wines={wines}
+          getAuthHeaders={getAuthHeaders}
+          excludedId={item?.wineVintageId}
           label="Wine record"
-          value={wineVintageId}
-          options={[
-            { value: "", label: "Create a separate wine record" },
-            ...selectableWines.map((candidate) => ({
-              value: candidate.wineVintageId,
-              label: wineOptionLabel(candidate),
-              description: candidate.wineVintageId,
-            })),
-          ]}
-          description="Choose an existing wine explicitly, or save a separate record. Similar details never merge wine records."
-          onChange={(value: string) => {
-            setWineVintageId(value);
+          allowNew
+          onChange={(id, option) => {
+            setWineVintageId(id);
+            setSelectedWine(option);
           }}
         />
       ) : null}
       <SelectedWineSummary
-        item={selectableWines.find((candidate) => candidate.wineVintageId === wineVintageId)}
+        item={
+          selectedWine ??
+          selectableWines.find((candidate) => candidate.wineVintageId === wineVintageId)
+        }
       />
       {wineEditable ? <p>Catalogue title: {formatWineLabel(wineFacts)}</p> : null}
       {needsIdentityConfirmation ? (

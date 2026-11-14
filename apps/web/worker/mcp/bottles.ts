@@ -17,7 +17,7 @@ import { z } from "zod";
 import type { BottleResource, BottleWithDrinkStatus, DrinkStatus } from "../api/inventory.ts";
 import { withDrinkStatus } from "../api/inventory.ts";
 import { listStorageLocationDisplayNames } from "./catalogue.ts";
-import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
+import { decodePageCursor, pageFromRows, pageLimit, type Page } from "../read-pagination.ts";
 import type {
   bottleDetailSchema,
   listDrinkQueueInputSchema,

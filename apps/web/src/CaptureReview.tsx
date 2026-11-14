@@ -12,7 +12,9 @@ import type {
   CaptureReviewCandidate,
 } from "../shared/capture-import.ts";
 import { hasWineIdentity } from "../shared/wine-identity.ts";
-import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
+import { WineRecordPicker } from "./WineRecordPicker.tsx";
+import type { AuthHeadersProvider } from "./useReadPage.ts";
+import type { WineOption } from "../shared/wine-options.ts";
 import { GrapeVarietiesInput } from "./GrapeVarietiesInput.tsx";
 import type { CaptureResource } from "./inventory-model.ts";
 
@@ -60,6 +62,7 @@ type ReviewDraft = {
 export function CaptureReview({
   capture,
   wines,
+  getAuthHeaders,
   canWrite,
   disabled,
   onDirtyChange,
@@ -69,6 +72,7 @@ export function CaptureReview({
 }: {
   readonly capture: CaptureResource;
   readonly wines: readonly WineOption[];
+  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
   readonly canWrite: boolean;
   readonly disabled: boolean;
   readonly onDirtyChange: (dirty: boolean) => void;
@@ -287,6 +291,7 @@ export function CaptureReview({
           identified={identified}
           candidates={wineVintageCandidates(capture.latestRun?.matchResult, revision)}
           wines={wines}
+          getAuthHeaders={getAuthHeaders}
           siteId={capture.siteId}
           reviewRevision={revision}
           onSave={save}
@@ -402,6 +407,7 @@ function CaptureReviewActions({
   identified,
   candidates,
   wines,
+  getAuthHeaders,
   siteId,
   reviewRevision,
   onSave,
@@ -415,6 +421,7 @@ function CaptureReviewActions({
   readonly identified: boolean;
   readonly candidates: readonly { readonly id: string; readonly label: string }[];
   readonly wines: readonly WineOption[];
+  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
   readonly siteId: string;
   readonly reviewRevision: number;
   readonly onSave: () => Promise<void>;
@@ -433,6 +440,7 @@ function CaptureReviewActions({
       <CaptureWineChoice
         key={reviewRevision}
         wines={wines}
+        getAuthHeaders={getAuthHeaders}
         siteId={siteId}
         disabled={blocked || dirty || needsSavedCandidate}
         onImport={onImport}
@@ -517,37 +525,32 @@ function CaptureReviewField({
 
 function CaptureWineChoice({
   wines,
+  getAuthHeaders,
   siteId,
   disabled,
   onImport,
 }: {
   readonly wines: readonly WineOption[];
+  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
   readonly siteId: string;
   readonly disabled: boolean;
   readonly onImport: (wineVintageId: string) => Promise<void>;
 }): ReactElement {
   const [selected, setSelected] = useState("");
-  const siteWines = wines.filter((wine) => wine.siteId === siteId);
   return (
     <div>
-      <Selector
+      <WineRecordPicker
         label="Existing wine in this site"
-        value={selected}
-        isDisabled={disabled || siteWines.length === 0}
-        description="Choose a wine explicitly. Its shared details will stay unchanged."
-        placeholder="Choose an existing wine"
-        options={siteWines.map((item) => ({
-          value: item.wineVintageId,
-          label: wineOptionLabel(item),
-          description: item.wineVintageId,
-        }))}
-        onChange={(value: string) => {
-          setSelected(value);
-        }}
+        siteId={siteId}
+        wines={getAuthHeaders === undefined ? wines : undefined}
+        getAuthHeaders={getAuthHeaders}
+        selected={selected}
+        disabled={disabled}
+        onChange={setSelected}
       />
       <Button
         label="Use selected wine"
-        isDisabled={disabled || !siteWines.some((item) => item.wineVintageId === selected)}
+        isDisabled={disabled || selected === ""}
         onClick={() => {
           void onImport(selected);
         }}

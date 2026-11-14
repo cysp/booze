@@ -1,68 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { bottleCreatePayload, bottleEditPayload } from "./bottle-payload.ts";
-import {
-  filterInventoryItems,
-  formStateForItem,
-  inventoryLocationOptions,
-  type InventoryItem,
-} from "./inventory-model.ts";
+import { formStateForItem, locationLabel, siteLabel } from "./inventory-model.ts";
 import { inventoryItemFixture, locationsFixture, sitesFixture } from "./test/catalogue-fixtures.ts";
 
-const filters = {
-  drinkStatusFilter: "",
-  filter: "",
-  siteIdFilter: "",
-  storageLocationIdFilter: "",
-  varietalFilter: "",
-};
-
-function select(items: readonly InventoryItem[], siteId: string, storageLocationId: string) {
-  return filterInventoryItems(items, [], {
-    ...filters,
-    siteIdFilter: siteId,
-    storageLocationIdFilter: storageLocationId,
-  }).map((item) => item.id);
-}
-
 describe("canonical catalogue resource identity", () => {
-  it("filters same-name sites and locations by IDs and preserves a selection through rename", () => {
-    const first = inventoryItemFixture({
-      id: "first",
-      siteId: "first-site",
-      siteName: "Cellar",
-      storageLocationId: "first-rack",
-      storageLocationName: "Rack",
-    });
-    const second = inventoryItemFixture({
-      id: "second",
-      siteId: "second-site",
-      siteName: "Cellar",
-      storageLocationId: "second-rack",
-      storageLocationName: "Rack",
-    });
-    const sibling = inventoryItemFixture({
-      id: "sibling",
-      siteId: "first-site",
-      siteName: "Cellar",
-      storageLocationId: "sibling-rack",
-      storageLocationName: "Rack",
-    });
-    expect(select([first, second, sibling], "first-site", "first-rack")).toEqual(["first"]);
-    expect(
-      select(
-        [
-          { ...first, siteName: "Renamed cellar", storageLocationName: "Renamed rack" },
-          second,
-          sibling,
-        ],
-        "first-site",
-        "first-rack",
-      ),
-    ).toEqual(["first"]);
-    expect(select([first, second, sibling], "second-site", "")).toEqual(["second"]);
-  });
-
   it("disambiguates same site names and same location paths without using those labels as values", () => {
     const firstSite = sitesFixture[0];
     if (firstSite === undefined) throw new Error("Missing site fixture");
@@ -74,10 +16,10 @@ describe("canonical catalogue resource identity", () => {
       { ...base, id: "duplicate-location" },
       { ...base, id: "other-location", siteId: "other-site" },
     ];
-    const items = locations.map((location) =>
-      inventoryItemFixture({ storageLocationId: location.id, siteId: location.siteId }),
-    );
-    const options = inventoryLocationOptions(items, locations, sites);
+    const options = locations.map((location) => ({
+      value: location.id,
+      label: `${siteLabel(sites.find((site) => site.id === location.siteId) ?? firstSite, sites)} / ${locationLabel(location, locations)}`,
+    }));
     expect(new Set(options.map((option) => option.label)).size).toBe(3);
     expect(options.map((option) => option.value).toSorted()).toEqual([
       "duplicate-location",
