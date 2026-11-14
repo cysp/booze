@@ -151,6 +151,8 @@
 
   .inventory-controls {
     display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-3);
     justify-content: flex-end;
   }
 
@@ -451,6 +453,7 @@
     }
 
     .inventory-controls {
+      flex-direction: column;
       justify-content: stretch;
     }
 
@@ -510,5 +513,52 @@
     display: grid;
     gap: var(--spacing-2);
     justify-items: start;
+  }
+}
+
+.bottle-details-facts {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.bottle-details-facts > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr);
+  gap: 0.75rem;
+}
+
+.bottle-details-facts dt {
+  font-weight: 600;
+}
+
+.bottle-details-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.bottle-details {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bottle-details .dialog-actions {
+  flex-wrap: wrap;
+}
+
+.bottle-details-facts,
+.bottle-details-facts > div,
+.bottle-details-facts dt,
+.bottle-details .form-section {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .bottle-details-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.125rem;
   }
 }

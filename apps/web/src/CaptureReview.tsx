@@ -15,7 +15,6 @@ import { captureReviewCandidateSchema } from "../shared/capture-review.ts";
 import { hasWineIdentity } from "../shared/wine-identity.ts";
 import { WineRecordPicker } from "./WineRecordPicker.tsx";
 import type { AuthHeadersProvider } from "./useReadPage.ts";
-import type { WineOption } from "../shared/wine-options.ts";
 import { GrapeVarietiesInput } from "./GrapeVarietiesInput.tsx";
 import type { CaptureResource } from "./inventory-model.ts";
 
@@ -63,7 +62,6 @@ type ReviewDraft = {
 
 export function CaptureReview({
   capture,
-  wines,
   getAuthHeaders,
   canWrite,
   disabled,
@@ -73,8 +71,7 @@ export function CaptureReview({
   onSaveReview,
 }: {
   readonly capture: CaptureResource;
-  readonly wines: readonly WineOption[];
-  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly canWrite: boolean;
   readonly disabled: boolean;
   readonly onDirtyChange: (dirty: boolean) => void;
@@ -334,7 +331,6 @@ export function CaptureReview({
           invalidBottle={invalidBottle}
           invalidWine={invalidWine}
           candidates={wineVintageCandidates(capture.latestRun?.matchResult, revision)}
-          wines={wines}
           getAuthHeaders={getAuthHeaders}
           siteId={capture.siteId}
           reviewRevision={revision}
@@ -493,7 +489,6 @@ function CaptureReviewActions({
   invalidBottle,
   invalidWine,
   candidates,
-  wines,
   getAuthHeaders,
   siteId,
   reviewRevision,
@@ -509,8 +504,7 @@ function CaptureReviewActions({
   readonly invalidBottle: boolean;
   readonly invalidWine: boolean;
   readonly candidates: readonly { readonly id: string; readonly label: string }[];
-  readonly wines: readonly WineOption[];
-  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly siteId: string;
   readonly reviewRevision: number;
   readonly onSave: () => Promise<void>;
@@ -528,7 +522,6 @@ function CaptureReviewActions({
       />
       <CaptureWineChoice
         key={reviewRevision}
-        wines={wines}
         getAuthHeaders={getAuthHeaders}
         siteId={siteId}
         disabled={blocked || dirty || needsSavedCandidate || invalidBottle}
@@ -670,14 +663,12 @@ function CaptureReviewField({
 }
 
 function CaptureWineChoice({
-  wines,
   getAuthHeaders,
   siteId,
   disabled,
   onImport,
 }: {
-  readonly wines: readonly WineOption[];
-  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly siteId: string;
   readonly disabled: boolean;
   readonly onImport: (wineVintageId: string) => Promise<void>;
@@ -688,7 +679,6 @@ function CaptureWineChoice({
       <WineRecordPicker
         label="Existing wine in this site"
         siteId={siteId}
-        wines={getAuthHeaders === undefined ? wines : undefined}
         getAuthHeaders={getAuthHeaders}
         selected={selected}
         disabled={disabled}

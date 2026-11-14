@@ -61,7 +61,7 @@ function catalogueReadResponse(url: URL, fixtures: CatalogueFixtures): unknown {
         drinkQueueBottleCount: bottleData.filter(
           (bottle) =>
             bottle.status === "in_stock" &&
-            ["drink-now", "drink-soon"].includes(calculateDrinkStatus(bottle)),
+            ["drink-now", "drink-soon", "past-window"].includes(calculateDrinkStatus(bottle)),
         ).length,
         captures: captureCounts,
       },
@@ -69,7 +69,7 @@ function catalogueReadResponse(url: URL, fixtures: CatalogueFixtures): unknown {
   if (url.pathname === "/api/bottles") {
     const filtered = bottleData.filter(
       (bottle) =>
-        bottle.status === "in_stock" &&
+        bottle.status === (url.searchParams.get("status") ?? "in_stock") &&
         matchesQuery(
           [
             bottle.wineryName,
@@ -410,8 +410,8 @@ test("reads bounded page resources and opens capture/bottle detail only on deman
   expect(reads.filter((path) => path === "/api/bottle-captures/capture-1")).toHaveLength(1);
 
   await page.getByRole("button", { name: "Inventory", exact: true }).click();
-  await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
-  await expect(page.getByRole("dialog", { name: "Edit bottle" })).toBeVisible();
+  await page.locator(".bottle-card").first().getByRole("button", { name: "View details" }).click();
+  await expect(page.getByRole("dialog", { name: "Bottle details" })).toBeVisible();
   expect(reads.filter((path) => path === "/api/bottles/bottle-1")).toHaveLength(1);
 });
 
@@ -526,10 +526,13 @@ test("persists navigation and filters while remaining accessible at reduced moti
   await page.keyboard.press("Escape");
   await expect(addBottle).toBeFocused();
 
-  const editBottle = page.locator(".bottle-card").first().getByRole("button", { name: "Edit" });
+  const editBottle = page
+    .locator(".bottle-card")
+    .first()
+    .getByRole("button", { name: "View details" });
   await editBottle.focus();
   await editBottle.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Edit bottle" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Bottle details" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(editBottle).toBeFocused();
 
@@ -542,15 +545,18 @@ test("persists navigation and filters while remaining accessible at reduced moti
 });
 
 test("keeps failed editor values and rejects malformed award numbers", async ({ page }) => {
-  await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
-  const dialog = page.getByRole("dialog", { name: "Edit bottle" });
+  await page.locator(".bottle-card").first().getByRole("button", { name: "View details" }).click();
+  await page
+    .getByRole("dialog", { name: "Bottle details" })
+    .getByRole("button", { name: "Correct shared wine" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Correct shared wine" });
   await expectNoAxeViolations(page);
-  await dialog.getByRole("combobox", { name: "What are you editing?" }).click();
-  await page.getByRole("option", { name: "Correct wine details" }).click();
   await expect(dialog.getByText(/Corrections will update all/u)).toBeVisible();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   const winery = dialog.getByRole("textbox", { name: /Winery/u });
   await winery.fill("Unsaved Browser Winery");
+  await dialog.getByText("Wine reference and evidence", { exact: true }).click();
   await dialog.getByRole("button", { name: "Add review" }).click();
   await dialog.locator("[name='criticReviews.0.reviewSourceName']").fill("Browser critic");
   await dialog.locator("[name='criticReviews.0.ratingText']").fill("96 points");
@@ -559,7 +565,7 @@ test("keeps failed editor values and rejects malformed award numbers", async ({ 
   await dialog.locator("[name='awards.0.awardName']").fill("Browser show");
   const awardPoints = dialog.locator("[name='awards.0.points']");
   await awardPoints.fill("0x10");
-  await dialog.getByRole("button", { name: "Save bottle" }).click();
+  await dialog.getByRole("button", { name: "Save wine corrections" }).click();
   await expect(awardPoints).toHaveAttribute("aria-invalid", "true");
   await expect(awardPoints).toHaveAccessibleDescription("Points must be a decimal number.");
   await expect(
@@ -567,7 +573,7 @@ test("keeps failed editor values and rejects malformed award numbers", async ({ 
   ).toBeVisible();
 
   await awardPoints.fill("95");
-  await dialog.getByRole("button", { name: "Save bottle" }).click();
+  await dialog.getByRole("button", { name: "Save wine corrections" }).click();
   await expect(
     dialog.getByRole("alert").filter({ hasText: "Bottle was not updated." }),
   ).toBeVisible();
@@ -618,8 +624,8 @@ test("keeps named resource rename state on failure and completes successful rena
 
 test("keeps every destructive failure inside its active nested dialog", async ({ page }) => {
   const bottleCard = page.locator(".bottle-card").first();
-  await bottleCard.getByRole("button", { name: "Edit" }).click();
-  const bottleDialog = page.getByRole("dialog", { name: "Edit bottle" });
+  await bottleCard.getByRole("button", { name: "View details" }).click();
+  const bottleDialog = page.getByRole("dialog", { name: "Bottle details" });
   await failDestructiveAction(
     page,
     bottleDialog.getByRole("button", { name: "Delete bottle" }),
@@ -664,8 +670,8 @@ test("keeps successful destructive lifecycles mounted through reload and restore
   await mockCatalogue(page, { successfulDeletes: true });
   await page.reload();
 
-  await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
-  const bottleDialog = page.getByRole("dialog", { name: "Edit bottle" });
+  await page.locator(".bottle-card").first().getByRole("button", { name: "View details" }).click();
+  const bottleDialog = page.getByRole("dialog", { name: "Bottle details" });
   await bottleDialog.getByRole("button", { name: "Delete bottle" }).click();
   const bottleDeleteDialog = page.getByRole("alertdialog", { name: "Delete this bottle?" });
   await bottleDeleteDialog.getByRole("button", { name: "Delete bottle" }).click();
@@ -706,8 +712,8 @@ test("treats a committed delete as successful when catalogue refresh fails", asy
   await mockCommittedMutationWithStaleRefresh(page, scenario);
   await page.reload();
 
-  await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
-  const bottleDialog = page.getByRole("dialog", { name: "Edit bottle" });
+  await page.locator(".bottle-card").first().getByRole("button", { name: "View details" }).click();
+  const bottleDialog = page.getByRole("dialog", { name: "Bottle details" });
   await bottleDialog.getByRole("button", { name: "Delete bottle" }).click();
   const deleteDialog = page.getByRole("alertdialog", { name: "Delete this bottle?" });
   await deleteDialog.getByRole("button", { name: "Delete bottle" }).click();
@@ -811,14 +817,14 @@ test("keeps a representative large catalogue scrollable and focusable", async ({
   const firstRevealedCard = cards.nth(50);
   await expect(firstRevealedCard).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(firstRevealedCard.getByRole("button", { name: "Edit" })).toBeFocused();
+  await expect(firstRevealedCard.getByRole("button", { name: "View details" })).toBeFocused();
   await page.getByRole("button", { name: "Load more", exact: true }).click();
   await expect(cards).toHaveCount(150);
   await page.getByRole("button", { name: "Load more", exact: true }).click();
   await expect(cards).toHaveCount(160);
   const inventoryStatus = page.locator(".inventory-pagination [role='status']");
   await expect(inventoryStatus).toHaveText("Showing 160 of 160 matching bottles");
-  const lastEdit = cards.last().getByRole("button", { name: "Edit" });
+  const lastEdit = cards.last().getByRole("button", { name: "View details" });
   await lastEdit.scrollIntoViewIfNeeded();
   await expect(lastEdit).toBeVisible();
   await lastEdit.focus();
@@ -952,9 +958,13 @@ test.describe("phone theme", () => {
       true,
     );
 
-    await page.locator(".bottle-card").first().getByRole("button", { name: "Edit" }).click();
     await page
-      .getByRole("dialog", { name: "Edit bottle" })
+      .locator(".bottle-card")
+      .first()
+      .getByRole("button", { name: "View details" })
+      .click();
+    await page
+      .getByRole("dialog", { name: "Bottle details" })
       .getByRole("button", { name: "Delete bottle" })
       .click();
     const dialog = page.getByRole("alertdialog", { name: "Delete this bottle?" });

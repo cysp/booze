@@ -18,6 +18,7 @@ import {
 } from "./test/catalogue-fixtures.ts";
 import type { CaptureFormState, CaptureResource, CaptureRunResource } from "./inventory-model.ts";
 
+const auth = async () => ({});
 const captureForm = {
   location: "",
   position: "",
@@ -76,14 +77,13 @@ function captureElement({
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
-      const id = decodeURIComponent(
-        new URL(
-          input instanceof Request ? input.url : String(input),
-          window.location.origin,
-        ).pathname
-          .split("/")
-          .at(-1) ?? "",
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.origin,
       );
+      if (url.pathname === "/api/wines")
+        return Response.json({ data: wines, totalCount: wines.length, nextPageToken: null });
+      const id = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
       return new Response(JSON.stringify({ data: detailFixtures.get(id) }), {
         status: detailFixtures.has(id) ? 200 : 404,
       });
@@ -91,6 +91,7 @@ function captureElement({
   );
   return (
     <CaptureArea
+      getAuthHeaders={auth}
       captures={captures.map((capture) =>
         captureSummarySchema.parse({
           ...capture,
@@ -98,7 +99,6 @@ function captureElement({
           previewImage: capture.images[0] ?? null,
         }),
       )}
-      wines={wines}
       counts={{
         actionable: captures.filter((capture) =>
           ["failed", "needs_review", "upload_failed"].includes(capture.status),
@@ -367,6 +367,7 @@ function QuantityCaptureHarness({
   const [form, setForm] = useState<CaptureFormState>(captureForm);
   return (
     <CaptureArea
+      getAuthHeaders={auth}
       captures={[]}
       counts={{ actionable: 0, processing: 0, imported: 0 }}
       totalCount={0}

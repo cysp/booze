@@ -8,14 +8,11 @@ import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
 import { useDebouncedQuery } from "./useDebouncedQuery.ts";
 import { useReadPage, type AuthHeadersProvider } from "./useReadPage.ts";
 
-const noAuth: AuthHeadersProvider = async () => ({});
-
 export function WineRecordPicker({
   siteId,
   selected,
   onChange,
   getAuthHeaders,
-  wines,
   excludedId,
   label,
   disabled = false,
@@ -24,8 +21,7 @@ export function WineRecordPicker({
   readonly siteId: string;
   readonly selected: string;
   readonly onChange: (id: string, option: WineOption | undefined) => void;
-  readonly getAuthHeaders?: AuthHeadersProvider | undefined;
-  readonly wines?: readonly WineOption[] | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly excludedId?: string | undefined;
   readonly label: string;
   readonly disabled?: boolean;
@@ -38,12 +34,12 @@ export function WineRecordPicker({
   const settledQuery = useDebouncedQuery(query);
   const parameters = new URLSearchParams({ siteId, query: settledQuery, limit: "50" });
   const read = useReadPage({
-    active: getAuthHeaders !== undefined && siteId !== "",
-    getAuthHeaders: getAuthHeaders ?? noAuth,
+    active: siteId !== "",
+    getAuthHeaders,
     path: `/api/wines?${parameters.toString()}`,
     schema: wineOptionsPageSchema,
   });
-  const options = (wines ?? read.page?.data ?? []).filter(
+  const options = (read.page?.data ?? []).filter(
     (wine) => wine.siteId === siteId && wine.wineVintageId !== excludedId,
   );
   const hasSelected = options.some((wine) => wine.wineVintageId === selected);
@@ -51,7 +47,6 @@ export function WineRecordPicker({
     let current = true;
     if (
       selected !== "" &&
-      getAuthHeaders !== undefined &&
       !hasSelected &&
       !(chosen?.wineVintageId === selected && chosen.siteId === siteId)
     ) {
@@ -86,14 +81,7 @@ export function WineRecordPicker({
     options.push(chosen);
   return (
     <div>
-      {getAuthHeaders === undefined ? null : (
-        <TextInput
-          label="Search wine records"
-          autoComplete="off"
-          value={query}
-          onChange={setQuery}
-        />
-      )}
+      <TextInput label="Search wine records" autoComplete="off" value={query} onChange={setQuery} />
       <Selector
         label={label}
         value={selected}

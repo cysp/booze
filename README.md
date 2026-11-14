@@ -32,7 +32,13 @@ major; Dependabot leaves major upgrades for a runtime change.
 
 Fetch current `origin/main` before running checks: the local D1 migration test uses it as the accepted upgrade history. See [migration authoring](docs/drizzle-migrations.md) for generation and parallel edits.
 
-The checks include migrated SQLite and D1 upgrade tests, React interaction tests, generated-theme validation, and Chrome browser tests in light and dark modes. Browser tests require Google Chrome and reserve port 4174. The build checks client bundle budgets.
+The checks include migrated SQLite and D1 upgrade tests, React interaction tests, generated-theme validation, and Chrome browser tests in light and dark modes. Browser tests require Google Chrome and reserve port 4174. Their server creates and migrates temporary local D1/R2 state, excludes hosted credentials and remote bindings, and removes its state on shutdown. Its D1 and R2 data are separate from `apps/web/.wrangler`. Most browser tests isolate interaction behavior with response fixtures; a small real-Worker suite verifies persisted additions, physical-bottle movement, consumption/restoration, and retries after a lost acknowledgement. The build checks client bundle budgets.
+
+Run only the real browser-to-Worker scenarios with:
+
+```sh
+pnpm --filter @chikachow/booze-web test:browser catalogue-real.spec.ts
+```
 
 ## Project layout
 

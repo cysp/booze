@@ -32,13 +32,11 @@ import { BottleLocationPicker } from "./BottleLocationPicker.tsx";
 import { DestructiveActionDialog } from "./DestructiveActionDialog.tsx";
 import { MAX_CAPTURE_FILES, mergeCaptureFiles } from "./capture-files.ts";
 import { captureStatus } from "./capture-status.ts";
-import type { WineOption } from "../shared/wine-options.ts";
 import { CaptureReview } from "./CaptureReview.tsx";
 
 type CaptureAreaProps = {
   readonly captures: readonly CaptureSummary[];
-  readonly wines?: readonly WineOption[];
-  readonly getAuthHeaders?: AuthHeadersProvider;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly counts: CaptureCounts;
   readonly totalCount: number;
   readonly hasMore: boolean;
@@ -81,7 +79,6 @@ export type CaptureSubmitResult =
 
 export function CaptureArea({
   captures,
-  wines = [],
   getAuthHeaders,
   counts,
   totalCount,
@@ -325,7 +322,6 @@ export function CaptureArea({
         view={view}
         onViewChange={onViewChange}
         getAuthHeaders={getAuthHeaders}
-        wines={wines}
         locations={locations}
         writableSiteIds={writableSiteIds}
         onDelete={onDelete}
@@ -369,11 +365,8 @@ function SelectedPhoto({
   );
 }
 
-const noAuth: AuthHeadersProvider = async () => ({});
-
 function CaptureDashboard({
   captures,
-  wines,
   counts,
   totalCount,
   hasMore,
@@ -391,7 +384,6 @@ function CaptureDashboard({
   onRetry,
 }: {
   readonly captures: readonly CaptureSummary[];
-  readonly wines: readonly WineOption[];
   readonly counts: CaptureCounts;
   readonly totalCount: number;
   readonly hasMore: boolean;
@@ -400,7 +392,7 @@ function CaptureDashboard({
   readonly onLoadMore: () => Promise<unknown>;
   readonly view: "action" | "all";
   readonly onViewChange: ((view: "action" | "all") => void) | undefined;
-  readonly getAuthHeaders: AuthHeadersProvider | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly locations: readonly LocationItem[];
   readonly writableSiteIds: ReadonlySet<string>;
   readonly onDelete: (captureId: string) => Promise<boolean>;
@@ -469,7 +461,6 @@ function CaptureDashboard({
             <CaptureCard
               key={capture.id}
               capture={capture}
-              wines={wines}
               getAuthHeaders={getAuthHeaders}
               listed={displayedIds.has(capture.id)}
               canWrite={writableSiteIds.has(capture.siteId)}
@@ -537,7 +528,6 @@ function CaptureDashboard({
 // oxlint-disable-next-line complexity -- The card keeps selected detail, review drafts, pending actions, and their accessibility feedback together.
 function CaptureCard({
   canWrite,
-  wines,
   capture,
   locations,
   onImport,
@@ -549,14 +539,13 @@ function CaptureCard({
   onRetry,
 }: {
   readonly canWrite: boolean;
-  readonly wines: readonly WineOption[];
   readonly capture: CaptureSummary;
   readonly locations: readonly LocationItem[];
   readonly onImport: CaptureImportAction;
   readonly onSaveReview: CaptureReviewSaveAction;
   readonly onRequestDelete: (capture: CaptureSummary, trigger: HTMLButtonElement) => void;
   readonly onOpenedChange: (opened: boolean) => void;
-  readonly getAuthHeaders: AuthHeadersProvider | undefined;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly listed: boolean;
   readonly onRetry: (captureId: string) => Promise<boolean>;
 }): ReactElement {
@@ -577,7 +566,7 @@ function CaptureCard({
       void (async () => {
         try {
           const response = await fetch(`/api/bottle-captures/${encodeURIComponent(capture.id)}`, {
-            headers: await (getAuthHeaders ?? noAuth)(),
+            headers: await getAuthHeaders(),
           });
           if (!response.ok) throw new Error("Capture detail failed");
           const payload: unknown = await response.json();
@@ -714,7 +703,6 @@ function CaptureCard({
       {opened && detail !== null && (canReview || hasUnsavedReview || isReviewBusy) ? (
         <CaptureReview
           capture={detail}
-          wines={wines}
           getAuthHeaders={getAuthHeaders}
           canWrite={canWrite}
           disabled={pendingAction !== null || !canReview}

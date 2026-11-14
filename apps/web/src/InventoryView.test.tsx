@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import axe from "axe-core";
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -18,9 +19,10 @@ const noop = (): void => {
 function renderInventory(
   editableSiteIds: ReadonlySet<string>,
   items = inventoryFixtures.many as readonly ReturnType<typeof inventoryItemFixture>[],
-  onEditBottle = noop as (item: InventorySummaryItem) => void,
+  onOpenBottle = noop as (item: InventorySummaryItem) => void,
   onCreateSite?: () => void,
   grouping: "winery" | "storage" = "winery",
+  overrides: Partial<ComponentProps<typeof InventoryArea>> = {},
 ) {
   return render(
     <InventoryArea
@@ -32,6 +34,7 @@ function renderInventory(
       editableSiteIds={editableSiteIds}
       filter=""
       grouping={grouping}
+      inventoryStatus="in_stock"
       items={items}
       siteIdFilter=""
       siteOptions={[]}
@@ -43,12 +46,14 @@ function renderInventory(
       varietalOptions={["Shiraz"]}
       onCreateSite={onCreateSite}
       onAddBottle={noop}
-      onEditBottle={onEditBottle}
+      onOpenBottle={onOpenBottle}
       setDrinkStatusFilter={noop}
       setFilter={noop}
       setGrouping={noop}
+      setInventoryStatus={noop}
       setStorageLocationIdFilter={noop}
       setVarietalFilter={noop}
+      {...overrides}
     />,
   );
 }
@@ -75,20 +80,20 @@ describe("InventoryArea", () => {
       lotCode: "L42",
       bottleNotes: "Damaged label",
     });
-    const onEditBottle = vi.fn<(item: InventorySummaryItem) => void>();
-    renderInventory(new Set(["site-owner"]), [first, second], onEditBottle);
+    const onOpenBottle = vi.fn<(item: InventorySummaryItem) => void>();
+    renderInventory(new Set(["site-owner"]), [first, second], onOpenBottle);
 
-    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
-    await user.click(screen.getByText("Choose a bottle to edit, move, or mark drunk"));
+    expect(screen.queryByRole("button", { name: "View details" })).not.toBeInTheDocument();
+    await user.click(screen.getByText("Choose a bottle to view details"));
     const bottleRow = screen.getByText("Bottle 2 · Home cellar / Left rack / Slot 2").closest("li");
     expect(bottleRow).not.toBeNull();
     expect(bottleRow).toHaveTextContent("750ml");
     if (bottleRow === null) {
       throw new Error("Missing bottle row");
     }
-    await user.click(within(bottleRow).getByRole("button", { name: "Edit bottle 2" }));
+    await user.click(within(bottleRow).getByRole("button", { name: "View details for bottle 2" }));
 
-    expect(onEditBottle).toHaveBeenCalledExactlyOnceWith(second);
+    expect(onOpenBottle).toHaveBeenCalledExactlyOnceWith(second);
   });
 
   it("keeps same-name sites and locations in separate storage groups", () => {
@@ -128,7 +133,43 @@ describe("InventoryArea", () => {
     expect(screen.getByRole("heading", { name: "Cellar (site-b)" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Rack (rack-a)" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Rack (rack-c)" })).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(3);
+  });
+
+  it("disambiguates identical physical bottles for viewers with stored IDs", async () => {
+    const user = userEvent.setup();
+    const first = inventoryItemFixture({ id: "physical-first", siteId: "site-viewer" });
+    const second = inventoryItemFixture({ id: "physical-second", siteId: "site-viewer" });
+    const onOpenBottle = vi.fn<(item: InventorySummaryItem) => void>();
+    renderInventory(new Set(), [first, second], onOpenBottle);
+    await user.click(screen.getByText("Choose a bottle to view details"));
+    const secondRow = screen.getByText(/Bottle ID: physical-second/u).closest("li");
+    expect(secondRow).not.toBeNull();
+    if (secondRow === null) throw new Error("Missing physical bottle row");
+    await user.click(within(secondRow).getByRole("button", { name: "View details for bottle 2" }));
+    expect(onOpenBottle).toHaveBeenCalledExactlyOnceWith(second);
+    expect(screen.queryByRole("button", { name: "Add bottle" })).not.toBeInTheDocument();
+  });
+
+  it("offers consumed history with its full count and no drink-window controls", async () => {
+    const user = userEvent.setup();
+    const setInventoryStatus = vi.fn<(value: "in_stock" | "consumed") => void>();
+    const consumed = inventoryItemFixture({ status: "consumed", siteId: "site-viewer" });
+    renderInventory(new Set(), [consumed], noop, undefined, "winery", {
+      inventoryStatus: "consumed",
+      setInventoryStatus,
+      totalCount: 81,
+      hasMore: true,
+    });
+
+    expect(screen.getByRole("radio", { name: "Consumed" })).toBeChecked();
+    expect(screen.queryByLabelText("Drink status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Drink now")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 81 matching bottles")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "View details" })).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "In stock" }));
+    expect(setInventoryStatus).toHaveBeenCalledExactlyOnceWith("in_stock");
   });
 
   it("keeps an opaque winery ID separate from a missing winery key", () => {
@@ -151,11 +192,16 @@ describe("InventoryArea", () => {
     expect(screen.getByRole("heading", { name: "Unknown winery" })).toBeVisible();
   });
 
-  it("does not expose write actions for read-only sites", () => {
-    renderInventory(new Set());
+  it("lets viewers open bottle details without exposing write actions", async () => {
+    const user = userEvent.setup();
+    const item = inventoryItemFixture({ siteId: "site-viewer" });
+    const onOpenBottle = vi.fn<(item: InventorySummaryItem) => void>();
+    renderInventory(new Set(), [item], onOpenBottle);
 
     expect(screen.queryByRole("button", { name: "Add bottle" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "View details" }));
+    expect(onOpenBottle).toHaveBeenCalledExactlyOnceWith(item);
   });
 
   it("renders populated long-content fixtures without automated accessibility violations", async () => {

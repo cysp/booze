@@ -1,11 +1,20 @@
 import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CaptureReview } from "./CaptureReview.tsx";
 import { captureFixture } from "./test/catalogue-fixtures.ts";
 import type { CaptureRunResource } from "./inventory-model.ts";
+
+const auth = async () => ({});
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ data: [], totalCount: 0, nextPageToken: null })),
+  );
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const run = {
   id: "run-1",
@@ -39,7 +48,7 @@ describe("capture review", () => {
   it("shows extracted facts and disagreement reasons before import", () => {
     render(
       <CaptureReview
-        wines={[]}
+        getAuthHeaders={auth}
         capture={captureFixture({ latestRun: run })}
         canWrite={false}
         disabled={false}
@@ -69,7 +78,7 @@ describe("capture review", () => {
   it("names unavailable evidence instead of presenting an empty review", () => {
     render(
       <CaptureReview
-        wines={[]}
+        getAuthHeaders={auth}
         capture={captureFixture({ latestRun: null })}
         canWrite={false}
         disabled={false}
@@ -108,13 +117,17 @@ it("preserves unsaved corrections when a newer extraction arrives", async () => 
     ) => ({ ok: true as const, reviewRevision, reviewCandidate }),
   };
   const { rerender } = render(
-    <CaptureReview wines={[]} {...common} capture={captureFixture({ latestRun: run })} />,
+    <CaptureReview
+      getAuthHeaders={auth}
+      {...common}
+      capture={captureFixture({ latestRun: run })}
+    />,
   );
   await user.clear(screen.getByRole("textbox", { name: "Producer / winery" }));
   await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), "Manual producer");
   rerender(
     <CaptureReview
-      wines={[]}
+      getAuthHeaders={auth}
       {...common}
       capture={captureFixture({
         latestRun: {
@@ -145,12 +158,16 @@ it("offers explicit recovery from concurrent corrections without silently discar
     ) => ({ ok: true as const, reviewRevision, reviewCandidate }),
   };
   const { rerender } = render(
-    <CaptureReview wines={[]} {...common} capture={captureFixture({ latestRun: run })} />,
+    <CaptureReview
+      getAuthHeaders={auth}
+      {...common}
+      capture={captureFixture({ latestRun: run })}
+    />,
   );
   await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), " local edit");
   rerender(
     <CaptureReview
-      wines={[]}
+      getAuthHeaders={auth}
       {...common}
       capture={captureFixture({
         latestRun: run,
@@ -173,7 +190,7 @@ it("offers explicit recovery from concurrent corrections without silently discar
 it("adopts newer extraction after local changes are undone instead of importing unseen facts", async () => {
   const user = userEvent.setup();
   const common = {
-    wines: [],
+    getAuthHeaders: auth,
     canWrite: true,
     disabled: false,
     onDirtyChange: vi.fn<(dirty: boolean) => void>(),
@@ -214,7 +231,7 @@ it("adopts newer extraction after local changes are undone instead of importing 
 
 it("adopts evidence arriving later for the same run when the draft is clean", () => {
   const common = {
-    wines: [],
+    getAuthHeaders: auth,
     canWrite: true,
     disabled: false,
     onDirtyChange: vi.fn<(dirty: boolean) => void>(),
@@ -248,7 +265,7 @@ it("preserves literal grape names while saving other capture corrections", async
   );
   render(
     <CaptureReview
-      wines={[]}
+      getAuthHeaders={auth}
       capture={captureFixture({
         reviewRevision: 2,
         reviewCandidate: {
@@ -286,7 +303,7 @@ function reviewWithIssue(path: string, rawValue: string): CaptureRunResource {
 
 function reviewActions() {
   return {
-    wines: [],
+    getAuthHeaders: auth,
     canWrite: true,
     disabled: false,
     onDirtyChange: vi.fn<(dirty: boolean) => void>(),
