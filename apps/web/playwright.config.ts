@@ -1,5 +1,12 @@
 // oxlint-disable import/no-default-export -- Playwright discovers configuration through the default export.
 import { defineConfig } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { env } from "node:process";
+
+// Discovery creates no state. The server exclusively creates and removes this directory.
+env["BOOZE_BROWSER_TEST_STATE"] ??= path.join(tmpdir(), `booze-playwright-${randomUUID()}`);
 
 export default defineConfig({
   expect: { timeout: 5_000 },
@@ -19,7 +26,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "VITE_AUTH_MODE=development pnpm dev --host 127.0.0.1 --port 4174",
+    command: "exec node scripts/browser-test-server.mjs",
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
     reuseExistingServer: false,
     timeout: 120_000,
     url: "http://127.0.0.1:4174/healthz",

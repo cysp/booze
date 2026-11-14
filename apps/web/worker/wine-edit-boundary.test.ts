@@ -9,9 +9,24 @@ import { userIdForClerkUser } from "./api/ids.ts";
 import type { Bindings } from "./api/types.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
-import { bottleEditPayload } from "../src/bottle-payload.ts";
-import { formStateForItem } from "../src/inventory-model.ts";
+import {
+  bottleEditPayload,
+  bottleFormSubmission,
+  type BottleActionKind,
+} from "../src/bottle-payload.ts";
+import { formStateForItem, type FormState, type InventoryItem } from "../src/inventory-model.ts";
 import { inventoryItemFixture } from "../src/test/catalogue-fixtures.ts";
+
+function formEditPayload(kind: BottleActionKind, item: InventoryItem, form: FormState) {
+  const submission = bottleFormSubmission(
+    { kind, item },
+    form,
+    { awards: [], criticReviews: [] },
+    "",
+  );
+  assert.ok(submission.kind !== "add");
+  return bottleEditPayload(submission, item);
+}
 
 function setup() {
   const sqlite = migratedDatabase();
@@ -73,9 +88,7 @@ await it("preserves unchanged grape measurements through frontend separate-wine 
   const form = formStateForItem(item);
   form.vintageStatus = "year";
   form.vintageYear = "2024";
-  const response = await request(
-    bottleEditPayload({ form, wineEditScope: "bottle", awards: [], criticReviews: [] }, item),
-  );
+  const response = await request(formEditPayload("reassign", item, form));
   assert.equal(response.status, 200, await response.text());
   const row = sqlite
     .prepare(
@@ -101,9 +114,7 @@ await it("keeps the MCP base name coherent after designation correction", async 
   const { sqlite, item, request } = setup();
   const form = formStateForItem(item);
   form.designation = "Estate";
-  const response = await request(
-    bottleEditPayload({ form, wineEditScope: "shared", awards: [], criticReviews: [] }, item),
-  );
+  const response = await request(formEditPayload("correct-wine", item, form));
   assert.equal(response.status, 200, await response.text());
   const row = sqlite
     .prepare(`SELECT base_name, designation, display_name FROM wine_vintages WHERE id = 'wine'`)
@@ -116,9 +127,7 @@ await it("keeps new grape measurements unknown and leaves the source composition
   const { sqlite, item, request } = setup();
   const form = formStateForItem(item);
   form.grapeVarieties = ["Cabernet Sauvignon"];
-  const response = await request(
-    bottleEditPayload({ form, wineEditScope: "bottle", awards: [], criticReviews: [] }, item),
-  );
+  const response = await request(formEditPayload("reassign", item, form));
   assert.equal(response.status, 200, await response.text());
   const rows = sqlite
     .prepare(
@@ -149,9 +158,7 @@ await it("copies the source measurements at transaction time", async () => {
   const form = formStateForItem(item);
   form.vintageStatus = "year";
   form.vintageYear = "2024";
-  const response = await request(
-    bottleEditPayload({ form, wineEditScope: "bottle", awards: [], criticReviews: [] }, item),
-  );
+  const response = await request(formEditPayload("reassign", item, form));
   assert.equal(response.status, 200, await response.text());
   const row = sqlite
     .prepare(
@@ -184,18 +191,14 @@ await it("preserves a legacy base name on unrelated correction but replaces it w
   sqlite.exec("UPDATE wine_vintages SET base_name = 'Historical name' WHERE id = 'wine'");
   const form = formStateForItem(item);
   form.wineNotes = "Corrected note";
-  const noteResponse = await request(
-    bottleEditPayload({ form, wineEditScope: "shared", awards: [], criticReviews: [] }, item),
-  );
+  const noteResponse = await request(formEditPayload("correct-wine", item, form));
   assert.equal(noteResponse.status, 200, await noteResponse.text());
   assert.equal(
     sqlite.prepare("SELECT base_name FROM wine_vintages WHERE id = 'wine'").get()?.["base_name"],
     "Historical name",
   );
   form.designation = "";
-  const clearResponse = await request(
-    bottleEditPayload({ form, wineEditScope: "shared", awards: [], criticReviews: [] }, item),
-  );
+  const clearResponse = await request(formEditPayload("correct-wine", item, form));
   assert.equal(clearResponse.status, 200, await clearResponse.text());
   const row = sqlite
     .prepare("SELECT base_name, designation FROM wine_vintages WHERE id = 'wine'")

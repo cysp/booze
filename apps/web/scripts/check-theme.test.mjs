@@ -18,7 +18,7 @@ import { after, before, describe, it } from "node:test";
 const webDirectory = path.resolve(import.meta.dirname, "..");
 const artifacts = ["booze.css", "booze.css.d.ts", "booze.js", "booze.d.ts", "booze.variants.d.ts"];
 
-describe("theme:check", () => {
+void describe("theme:check", () => {
   // Astryx confines generated files to the working directory.
   const directory = mkdtempSync(path.join(webDirectory, ".theme-check-"));
   const generatedDirectory = path.join(directory, "src/generated");
@@ -73,7 +73,7 @@ describe("theme:check", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("accepts current artifacts without writing them", () => {
+  void it("accepts current artifacts without writing them", () => {
     const original = snapshot();
     const check = run(true);
     assert.equal(check.status, 0, check.stdout + check.stderr);
@@ -82,7 +82,7 @@ describe("theme:check", () => {
 
   for (const artifact of artifacts) {
     for (const change of ["changed", "missing"]) {
-      it(`rejects ${change} ${artifact} without writing artifacts`, () => {
+      void it(`rejects ${change} ${artifact} without writing artifacts`, () => {
         const file = path.join(generatedDirectory, artifact);
         const original = readFileSync(file, "utf8");
         try {

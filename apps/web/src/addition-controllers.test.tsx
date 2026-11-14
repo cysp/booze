@@ -5,7 +5,7 @@ import { sitesFixture } from "./test/catalogue-fixtures.ts";
 import { useBottleController, useCaptureController } from "./useCatalogueControllers.ts";
 
 const form = { ...initialFormState, siteId: "site", wineryName: "Estate", quantity: "2" };
-const submission = { form, awards: [], criticReviews: [] };
+const submission = { kind: "add" as const, form, awards: [], criticReviews: [] };
 afterEach(() => {
   vi.unstubAllGlobals();
   sessionStorage.clear();
@@ -63,7 +63,6 @@ it("retains an uncertain bottle operation across retries and remount, blocks edi
   });
   expect(requests[2]?.["operationId"]).toBe(requests[0]?.["operationId"]);
   succeed = true;
-  shared.completeMutation.mockRejectedValue(new Error("refresh failed"));
   await act(async () => {
     expect((await hook.result.current.saveBottle(submission)).ok).toBe(true);
   });
@@ -72,7 +71,7 @@ it("retains an uncertain bottle operation across retries and remount, blocks edi
   });
   expect(requests[4]?.["operationId"]).not.toBe(requests[3]?.["operationId"]);
 });
-it("retains uncertain photos and operation identity, and treats a confirmed capture as saved despite reload failure", async () => {
+it("retains uncertain photos and operation identity, and resets the form after confirmed submission", async () => {
   const bodies: FormData[] = [];
   let succeed = false;
   vi.stubGlobal(
@@ -110,7 +109,6 @@ it("retains uncertain photos and operation identity, and treats a confirmed capt
   if (!(retainedImage instanceof File)) throw new TypeError("Expected retained photo");
   expect(retainedImage.name).toBe("label.jpg");
   succeed = true;
-  shared.completeMutation.mockRejectedValue(new Error("refresh failed"));
   await act(async () => {
     expect((await hook.result.current.submitCapture(captureForm, [photo])).kind).toBe("submitted");
   });

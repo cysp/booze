@@ -22,8 +22,9 @@ The current usable product supports:
 10. Available inventory search.
 11. A drink queue for bottles that are ready, soon due, or past their drink window.
 12. Bottle moves between known storage locations or back to no location.
-13. Marking bottles consumed so they disappear from available inventory.
+13. Consumed-history browsing and explicit restoration of physical bottles to available inventory.
 14. Storage-location cards with available bottle counts.
+15. Read-only bottle and shared-wine details for every authorised reader, with separate focused editing actions.
 
 The current app intentionally keeps bottle capture, bottle display, and location management in separate UI contexts. This reduces accidental data manipulation while browsing inventory and keeps the common mobile workflows short.
 
@@ -103,11 +104,14 @@ The app must support:
 3. storing label text manually;
 4. selecting a site and optional location by their stored IDs;
 5. moving a bottle to another known location;
-6. marking a bottle consumed;
-7. searching available inventory;
-8. showing drink status derived from the drink window.
+6. marking a bottle consumed and restoring it from consumed history;
+7. searching available or consumed bottles;
+8. showing drink status derived from the drink window;
+9. reading full wine, bottle, and source details without entering an edit form.
 
 The drinking window is edited as one fact: both endpoints are submitted together, with `null` for an unknown endpoint. The browser still presents separate Drink from and Drink to fields. REST bottle PATCH callers must send both fields when changing either one; MCP already uses this contract. Concurrent edits replace the complete window, and the last committed edit wins. Adding bottles can supply a window only when both stored endpoints are unknown; it cannot combine endpoints from different records.
+
+Opening a bottle shows its stored details without creating an edit draft. Explicit actions own separate drafts: move, edit individual bottle facts, correct shared wine facts, and reassign this bottle. Status changes and deletion do not submit wine metadata. Owners and editors can use these actions; viewers can read the same details. Shared-wine corrections show the affected bottle count and require the expected wine ID and count at commit.
 
 Changing a bottle's wine identity can reuse an existing wine vintage or create a new one. Reusing an existing vintage preserves its grape blend. A new vintage can inherit the original wine's constituent measurements; the original vintage's reviews and awards remain attached to it unless explicitly edited.
 
@@ -115,13 +119,15 @@ Adding bottles or submitting photos requires an operation ID and an explicit sit
 
 HTTP and MCP bottle, location, wine-window, and critic-review operations share complete domain operations. Their permission guard, mutation, and audit facts commit in one batch. Audit snapshots describe the state at that commit, rather than a later resource read. An unchanged request reports a successful no-op with no invented mutation.
 
-Resource representations keep stored IDs, numeric values, and array elements intact. New-entry validation is separate from reading historical values: an old value outside today's entry limits remains visible for deliberate correction. Neither renaming a site or location nor punctuation within a grape name changes its identity.
+Resource representations keep stored IDs, numeric values, and array elements intact. New-entry validation is separate from reading historical values: an old value outside today's entry limits remains visible for deliberate correction. Focused edits submit changed facts only, preserving unchanged historical values. Neither renaming a site or location nor punctuation within a grape name changes its identity.
 
 ## Catalogue Reads
 
 Inventory, wine choices, and captures use server pages with a default limit of 50 and a maximum of 100. Cursors use immutable creation time and stored ID, remain tied to the caller and filters, and are opaque to clients. Inventory pages return summaries, full matching counts, and facets; bottle and wine details load by authorized ID. Wine choices include records with no bottles. Sites and storage locations remain shared lightweight directories.
 
 The browser requests the active area's pages and loads more only on demand. Group counts describe bottles shown, not an assumed complete group. Free-text search runs over stored wine, bottle, location, review, and award facts, including fields omitted from summaries. Search treats `%`, `_`, and quotes literally; SQLite folds ASCII case, while other Unicode text requires matching case.
+
+The inventory has In stock and Consumed views. The URL retains the chosen view and its search, site, location, grape, and grouping choices across navigation. Drinking-window filters apply to in-stock bottles. Consumed history records current consumed status; the data model does not supply a consumption date. Restoring a bottle returns that same stored ID to inventory, retaining its location if it still exists.
 
 `GET /api/bottles` defaults to `status=in_stock`; `consumed` and `any` are explicit alternatives. `GET /api/bottle-captures` defaults to the action view, which includes processing and review work but excludes imported captures. Compact status reads track known captures independently of the current page. A missing tracked capture can invalidate inventory without being presented as a successful import.
 

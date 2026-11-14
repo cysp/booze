@@ -2,6 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bottles, captures, locations, sites } from "../e2e/catalogue-fixtures.ts";
 import { useCatalogue } from "./useCatalogue.ts";
+import { useBottleController, useCaptureController } from "./useCatalogueControllers.ts";
+import { initialCaptureFormState, initialFormState } from "./inventory-model.ts";
+import { catalogueStateFromUrl, inventoryQueryPath } from "./useCatalogueUrlState.ts";
 
 const auth = async (): Promise<Record<string, string>> => ({});
 const inventoryOptions = {
@@ -47,12 +50,127 @@ function fixture(input: string | URL | Request): Response {
 const pathOf = (input: string | URL | Request) =>
   new URL(input instanceof Request ? input.url : String(input), window.location.origin).pathname;
 afterEach(() => {
+  sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("page-scoped catalogue ownership", () => {
+  it("keeps consumed history paging scoped to status and opaque shared filters", async () => {
+    const requests: URL[] = [];
+    const historyState = catalogueStateFromUrl(
+      new URL(
+        "https://example.test/?status=consumed&q=Shiraz&siteId=site%2Fone&storageLocationId=rack%3Ftwo&varietal=Shiraz",
+      ),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+          window.location.origin,
+        );
+        requests.push(url);
+        if (url.pathname === "/api/bottles" && url.searchParams.get("status") === "consumed")
+          return response({
+            data: [
+              {
+                ...bottles[0],
+                id: url.searchParams.has("pageToken") ? "history-second" : "history-first",
+                status: "consumed",
+              },
+            ],
+            totalCount: 81,
+            nextPageToken: url.searchParams.has("pageToken") ? null : "history-next",
+            facets: { grapeVarieties: ["Shiraz"], drinkStatuses: ["drink-now"] },
+          });
+        return fixture(input);
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ path }) => useCatalogue(auth, { ...inventoryOptions, inventoryPath: path }),
+      { initialProps: { path: "/api/bottles?limit=50&status=in_stock" } },
+    );
+    await waitFor(() => {
+      expect(result.current.items).toHaveLength(1);
+    });
+    requests.length = 0;
+    rerender({ path: inventoryQueryPath(historyState) });
+    await waitFor(() => {
+      expect(result.current.items.map((item) => item.id)).toEqual(["history-first"]);
+    });
+    expect(result.current.inventory.page?.totalCount).toBe(81);
+    expect(result.current.summary.inStockBottleCount).toBe(101);
+    await act(async () => result.current.inventory.loadMore());
+    expect(result.current.items.map((item) => item.id)).toEqual([
+      "history-first",
+      "history-second",
+    ]);
+    expect(requests).toHaveLength(2);
+    expect(Object.fromEntries(requests[1]?.searchParams ?? [])).toEqual({
+      limit: "50",
+      status: "consumed",
+      query: "Shiraz",
+      siteId: "site/one",
+      storageLocationId: "rack?two",
+      grapeVariety: "Shiraz",
+      pageToken: "history-next",
+    });
+  });
+
+  it("refreshes consumed history after a restore without removing the surviving physical bottle", async () => {
+    let restored = false;
+    const requests: URL[] = [];
+    const surviving = { ...bottles[0], id: "still-consumed", status: "consumed" };
+    const restoreTarget = { ...bottles[0], id: "restored-bottle", status: "consumed" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+          window.location.origin,
+        );
+        requests.push(url);
+        if (url.pathname === "/api/bottles")
+          return response({
+            data: restored ? [surviving] : [restoreTarget, surviving],
+            totalCount: restored ? 1 : 2,
+            nextPageToken: null,
+            facets: { grapeVarieties: ["Shiraz"], drinkStatuses: ["drink-now"] },
+          });
+        if (url.pathname === "/api/catalogue-summary")
+          return response({
+            data: { ...summary, inStockBottleCount: restored ? 102 : 101 },
+          });
+        return fixture(input);
+      }),
+    );
+    const { result } = renderHook(() =>
+      useCatalogue(auth, {
+        ...inventoryOptions,
+        inventoryPath: "/api/bottles?limit=50&status=consumed&siteId=site-owner",
+      }),
+    );
+    await waitFor(() => {
+      expect(result.current.items).toHaveLength(2);
+    });
+    requests.length = 0;
+    restored = true;
+    await act(async () =>
+      result.current.completeMutation({ refresh: "catalogue", successMessage: "Bottle restored." }),
+    );
+    expect(result.current.items.map((item) => item.id)).toEqual(["still-consumed"]);
+    expect(result.current.inventory.page?.totalCount).toBe(1);
+    expect(result.current.summary.inStockBottleCount).toBe(102);
+    expect(result.current.status).toBe("Bottle restored.");
+    const historyRequests = requests.filter((request) => request.pathname === "/api/bottles");
+    expect(historyRequests).toHaveLength(1);
+    expect(historyRequests[0]?.searchParams.get("status")).toBe("consumed");
+    expect(historyRequests[0]?.searchParams.get("siteId")).toBe("site-owner");
+    expect(requests.some((request) => request.pathname === "/api/bottle-captures")).toBe(false);
+  });
+
   it("loads only the active inventory page and light resources; counts and facets cover unloaded rows", async () => {
     const fetch = vi.fn(async (input: string | URL | Request) => fixture(input));
     vi.stubGlobal("fetch", fetch);
@@ -447,3 +565,88 @@ describe("page-scoped catalogue ownership", () => {
     ).toHaveLength(1);
   });
 });
+
+it.each(["add", "edit", "delete", "capture"] as const)(
+  "keeps a confirmed %s successful when a real catalogue refresh fails",
+  async (action) => {
+    const bottle = bottles[0];
+    if (bottle === undefined) throw new Error("Expected bottle fixture");
+    let committed = false;
+    const mutations: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const path = pathOf(input);
+        if (init?.method !== undefined) {
+          mutations.push(init.method);
+          committed = true;
+          return init.method === "DELETE"
+            ? new Response(null, { status: 204 })
+            : response({
+                data: { id: bottle.id, captureId: "confirmed-capture", intakeComplete: true },
+              });
+        }
+        if (path === `/api/bottles/${bottle.id}`) return response({ data: bottle });
+        if (committed && path === "/api/sites") return new Response(null, { status: 503 });
+        return fixture(input);
+      }),
+    );
+    const { result } = renderHook(() => {
+      const catalogue = useCatalogue(auth);
+      const shared = {
+        additionScope: `refresh-failure-${action}`,
+        completeMutation: catalogue.completeMutation,
+        getAuthHeaders: auth,
+        setStatus: catalogue.setStatus,
+        writableSites: catalogue.sites,
+      };
+      return {
+        catalogue,
+        bottle: useBottleController({ ...shared, locations: catalogue.locations }),
+        capture: useCaptureController(shared),
+      };
+    });
+    await waitFor(() => {
+      expect(result.current.catalogue.isLoading).toBe(false);
+    });
+    await act(async () => {
+      if (action === "add")
+        expect(
+          await result.current.bottle.saveBottle({
+            kind: "add",
+            form: { ...initialFormState, siteId: "site-owner", wineryName: "Estate" },
+          }),
+        ).toEqual({ ok: true });
+      else if (action === "edit") {
+        await result.current.bottle.openBottleDetails(bottle);
+      } else if (action === "delete")
+        expect(await result.current.bottle.deleteBottle(bottle.id)).toBe(true);
+      else
+        expect(
+          (
+            await result.current.capture.submitCapture(
+              { ...initialCaptureFormState, siteId: "site-owner" },
+              [],
+            )
+          ).kind,
+        ).toBe("submitted");
+    });
+    if (action === "edit") {
+      await act(async () => {
+        expect(
+          await result.current.bottle.saveBottleEdit({
+            kind: "edit-bottle",
+            bottle: { notes: "Saved" },
+          }),
+        ).toEqual({ ok: true });
+      });
+      expect(result.current.bottle.selectedBottle?.id).toBe(bottle.id);
+    }
+    expect(mutations).toHaveLength(1);
+    expect(result.current.catalogue.status).toContain("Latest data could not be refreshed.");
+    expect(result.current.catalogue.refreshIssues).toContainEqual({
+      collection: "sites",
+      message: "Sites could not be refreshed. Try again.",
+    });
+  },
+);

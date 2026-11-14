@@ -27,6 +27,7 @@ type InventoryAreaProps = {
   readonly drinkStatusOptions: readonly SelectOption[];
   readonly filter: string;
   readonly grouping: InventoryGrouping;
+  readonly inventoryStatus: "in_stock" | "consumed";
   readonly items: readonly InventorySummaryItem[];
   readonly isLoading?: boolean;
   readonly totalCount?: number;
@@ -46,10 +47,11 @@ type InventoryAreaProps = {
   readonly setDrinkStatusFilter: (value: string) => void;
   readonly setFilter: (value: string) => void;
   readonly setGrouping: (value: InventoryGrouping) => void;
+  readonly setInventoryStatus: (value: "in_stock" | "consumed") => void;
   readonly setStorageLocationIdFilter: (value: string) => void;
   readonly setVarietalFilter: (value: string) => void;
   readonly onAddBottle: () => void;
-  readonly onEditBottle: (item: InventorySummaryItem) => void;
+  readonly onOpenBottle: (item: InventorySummaryItem) => void;
 };
 
 type SelectOption = {
@@ -68,6 +70,7 @@ export function InventoryArea({
   drinkStatusOptions,
   filter,
   grouping,
+  inventoryStatus,
   items,
   isLoading = false,
   totalCount = items.length,
@@ -89,10 +92,11 @@ export function InventoryArea({
   setDrinkStatusFilter,
   setFilter,
   setGrouping,
+  setInventoryStatus,
   setStorageLocationIdFilter,
   setVarietalFilter,
   onAddBottle,
-  onEditBottle,
+  onOpenBottle,
 }: InventoryAreaProps): ReactElement {
   return (
     <section className="workspace" aria-labelledby="inventory-title">
@@ -112,6 +116,18 @@ export function InventoryArea({
       </div>
 
       <div className="inventory-controls">
+        <SegmentedControl
+          label="Inventory status"
+          value={inventoryStatus}
+          onChange={(value: string) => {
+            if (value === "in_stock" || value === "consumed") {
+              setInventoryStatus(value);
+            }
+          }}
+        >
+          <SegmentedControlItem label="In stock" value="in_stock" />
+          <SegmentedControlItem label="Consumed" value="consumed" />
+        </SegmentedControl>
         <SegmentedControl
           label="Inventory grouping"
           value={grouping}
@@ -171,17 +187,19 @@ export function InventoryArea({
             setStorageLocationIdFilter(value ?? "");
           }}
         />
-        <Selector
-          hasClear
-          htmlName="drinkStatusFilter"
-          label="Drink status"
-          options={[...drinkStatusOptions]}
-          placeholder="All statuses"
-          value={drinkStatusFilter}
-          onChange={(value: string | null) => {
-            setDrinkStatusFilter(value ?? "");
-          }}
-        />
+        {inventoryStatus === "in_stock" ? (
+          <Selector
+            hasClear
+            htmlName="drinkStatusFilter"
+            label="Drink status"
+            options={[...drinkStatusOptions]}
+            placeholder="All statuses"
+            value={drinkStatusFilter}
+            onChange={(value: string | null) => {
+              setDrinkStatusFilter(value ?? "");
+            }}
+          />
+        ) : null}
       </div>
 
       {isLoading ? (
@@ -195,25 +213,23 @@ export function InventoryArea({
           }
           description={
             onCreateSite === undefined
-              ? "Catalogue bottles with drink windows and locations, or clear the active filters."
+              ? inventoryStatus === "consumed"
+                ? "Bottles marked consumed appear here. Clear the active filters to see more."
+                : "Catalogue bottles with drink windows and locations, or clear the active filters."
               : "Create a site such as Home to start cataloguing your bottles. Storage locations are optional."
           }
-          title={onCreateSite === undefined ? "No matching bottles" : "Start your cellar"}
+          title={
+            onCreateSite === undefined
+              ? inventoryStatus === "consumed"
+                ? "No matching consumed bottles"
+                : "No matching bottles"
+              : "Start your cellar"
+          }
         />
       ) : grouping === "winery" ? (
-        <WineryInventory
-          editableSiteIds={editableSiteIds}
-          items={items}
-          locations={locations}
-          onEditBottle={onEditBottle}
-        />
+        <WineryInventory items={items} locations={locations} onOpenBottle={onOpenBottle} />
       ) : (
-        <StorageInventory
-          editableSiteIds={editableSiteIds}
-          items={items}
-          locations={locations}
-          onEditBottle={onEditBottle}
-        />
+        <StorageInventory items={items} locations={locations} onOpenBottle={onOpenBottle} />
       )}
       <ReadPageStatus
         getRevealFocusTarget={(firstRevealedIndex) => {
@@ -232,15 +248,13 @@ export function InventoryArea({
 }
 
 function WineryInventory({
-  editableSiteIds,
   items,
   locations,
-  onEditBottle,
+  onOpenBottle,
 }: {
-  readonly editableSiteIds: ReadonlySet<string>;
   readonly items: readonly InventorySummaryItem[];
   readonly locations: readonly LocationItem[];
-  readonly onEditBottle: (item: InventorySummaryItem) => void;
+  readonly onOpenBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const groups = groupBy(
     items,
@@ -260,11 +274,10 @@ function WineryInventory({
           <div className="inventory-list">
             {wineRows(group.items).map((row) => (
               <WineCard
-                editable={editableSiteIds.has(row.item.siteId)}
                 key={row.item.wineVintageId}
                 locations={locations}
                 row={row}
-                onEditBottle={onEditBottle}
+                onOpenBottle={onOpenBottle}
               />
             ))}
           </div>
@@ -275,15 +288,13 @@ function WineryInventory({
 }
 
 function StorageInventory({
-  editableSiteIds,
   items,
   locations,
-  onEditBottle,
+  onOpenBottle,
 }: {
-  readonly editableSiteIds: ReadonlySet<string>;
   readonly items: readonly InventorySummaryItem[];
   readonly locations: readonly LocationItem[];
-  readonly onEditBottle: (item: InventorySummaryItem) => void;
+  readonly onOpenBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const sites = [
     ...new Map(
@@ -324,11 +335,10 @@ function StorageInventory({
               <div className="inventory-list">
                 {wineRows(locationGroup.items).map((row) => (
                   <WineCard
-                    editable={editableSiteIds.has(row.item.siteId)}
                     key={row.item.wineVintageId}
                     locations={locations}
                     row={row}
-                    onEditBottle={onEditBottle}
+                    onOpenBottle={onOpenBottle}
                   />
                 ))}
               </div>
@@ -411,20 +421,20 @@ function countLabel(count: number, singular: string): string {
 }
 
 function WineCard({
-  editable,
   locations,
   row,
-  onEditBottle,
+  onOpenBottle,
 }: {
-  readonly editable: boolean;
   readonly locations: readonly LocationItem[];
   readonly row: WineRow;
-  readonly onEditBottle: (item: InventorySummaryItem) => void;
+  readonly onOpenBottle: (item: InventorySummaryItem) => void;
 }): ReactElement {
   const item = row.item;
   return (
     <article
-      className={`bottle-card drink-${item.drinkStatus}`}
+      className={
+        item.status === "consumed" ? "bottle-card" : `bottle-card drink-${item.drinkStatus}`
+      }
       data-inventory-bottle-ids={row.bottles.map((bottle) => bottle.id).join("\n")}
       tabIndex={-1}
     >
@@ -433,36 +443,54 @@ function WineCard({
           <h3>{bottleTitle(item)}</h3>
           <p>{wineSubtitle(row, locations)}</p>
         </div>
-        <Badge label={drinkLabel(item.drinkStatus)} variant={drinkStatusBadge(item.drinkStatus)} />
+        {item.status === "consumed" ? (
+          <Badge label="Consumed" variant="neutral" />
+        ) : (
+          <Badge
+            label={drinkLabel(item.drinkStatus)}
+            variant={drinkStatusBadge(item.drinkStatus)}
+          />
+        )}
         {row.bottleCount === 1 ? null : (
           <span className="bottle-count">{row.bottleCount} bottles shown</span>
         )}
       </div>
       <p className="bottle-row-meta">
-        {[grapeSummary(item), wineOrigin(item), bottleFacts(item), `Drink ${drinkWindow(item)}`]
+        {[
+          grapeSummary(item),
+          wineOrigin(item),
+          bottleFacts(item),
+          item.status === "consumed" ? "" : `Drink ${drinkWindow(item)}`,
+        ]
           .filter((value) => value !== "")
           .join(" - ")}
       </p>
-      {editable && row.bottleCount > 1 ? (
+      {row.bottleCount > 1 ? (
         <details className="bottle-options">
-          <summary>Choose a bottle to edit, move, or mark drunk</summary>
+          <summary>Choose a bottle to view details</summary>
           <ul>
             {row.bottles.map((bottle, index) => (
               <li key={bottle.id}>
                 <div>
                   <p>{`Bottle ${index + 1} · ${storagePathLabel(bottle, locations)}`}</p>
                   <p className="field-hint">
-                    {[bottleFacts(bottle), bottle.bottleNumber]
+                    {[
+                      bottleFacts(bottle),
+                      bottle.bottleNumber,
+                      hasDuplicateBottleDescription(bottle, row.bottles, locations)
+                        ? `Bottle ID: ${bottle.id}`
+                        : null,
+                    ]
                       .filter((value) => value !== null && value !== "")
                       .join(" · ")}
                   </p>
                 </div>
                 <Button
-                  label={`Edit bottle ${index + 1}`}
+                  label={`View details for bottle ${index + 1}`}
                   size="sm"
                   variant="secondary"
                   onClick={() => {
-                    onEditBottle(bottle);
+                    onOpenBottle(bottle);
                   }}
                 />
               </li>
@@ -471,18 +499,30 @@ function WineCard({
         </details>
       ) : null}
       <div className="card-actions">
-        {editable && row.bottleCount === 1 ? (
+        {row.bottleCount === 1 ? (
           <Button
-            label="Edit"
+            label="View details"
             size="sm"
             variant="secondary"
             onClick={() => {
-              onEditBottle(item);
+              onOpenBottle(item);
             }}
           />
         ) : null}
       </div>
     </article>
+  );
+}
+
+function hasDuplicateBottleDescription(
+  bottle: InventorySummaryItem,
+  bottles: readonly InventorySummaryItem[],
+  locations: readonly LocationItem[],
+): boolean {
+  const description = (item: InventorySummaryItem) =>
+    JSON.stringify([storagePathLabel(item, locations), bottleFacts(item), item.bottleNumber]);
+  return bottles.some(
+    (candidate) => candidate.id !== bottle.id && description(candidate) === description(bottle),
   );
 }
 
