@@ -749,11 +749,13 @@ test("clears submitted capture files without duplicating a committed capture", a
   await page.getByRole("button", { name: "Submit capture" }).click();
 
   await expect(
-    page.getByText("Capture submitted. Extraction will run in the background.", { exact: true }),
+    page.getByText("Capture submitted. Review the extracted draft before adding bottles.", {
+      exact: true,
+    }),
   ).toBeVisible();
   // The app status region announces this outcome; the visible copy must not announce it again.
   const submittedBanner = page.locator(".astryx-banner-frame").filter({
-    hasText: "Capture submitted. Extraction will run in the background.",
+    hasText: "Capture submitted. Review the extracted draft before adding bottles.",
   });
   await expect(submittedBanner).not.toHaveAttribute("role");
   await expect(submittedBanner).not.toHaveAttribute("aria-live");
@@ -864,7 +866,9 @@ test("bounds capture, site, and location work before progressively revealing it"
   const reviewTrigger = firstRevealedCapture.getByRole("button", { name: "Review capture" });
   await expect(reviewTrigger).toBeFocused();
   await reviewTrigger.press("Enter");
-  await expect(firstRevealedCapture.getByRole("button", { name: "Create new" })).toBeDisabled();
+  await expect(
+    firstRevealedCapture.getByRole("button", { name: "Add bottles as new wine" }),
+  ).toBeDisabled();
   await expect(
     firstRevealedCapture.locator("summary", { hasText: "Review wine and bottle details" }),
   ).toBeVisible();

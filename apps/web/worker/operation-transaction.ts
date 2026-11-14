@@ -22,7 +22,9 @@ export function operationPermissionGuard(
   context: OperationContext,
   siteId: string | SQL,
   permission: SitePermission = "site.content.write",
-): OperationStatement {
+): OperationStatement & {
+  toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
+} {
   const allowedRoles = siteRoleSchema.options.filter((role) =>
     roleHasSitePermission(role, permission),
   );

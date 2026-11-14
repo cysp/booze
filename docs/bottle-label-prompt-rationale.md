@@ -1,4 +1,6 @@
-# Bottle Label Prompt Rationale
+# Historical bottle label prompt rationale
+
+This records the earlier multi-model extraction and reconciliation design. The current [capture workflow rationale](bottle-capture-workflow-rationale.md) supersedes it: one extractor prepares evidence for explicit human confirmation. The parameters and model recommendations below are historical, not configuration instructions.
 
 This document records the rationale for the bottle-label text extraction prompts, reconciliation prompt, model parameters, and storage-field alignment.
 

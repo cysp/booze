@@ -17,39 +17,42 @@ const addressQualification = "Producer and importer address evidence ".repeat(20
 const wineType = `${"Traditional method sparkling white wine ".repeat(4).slice(0, 119)}.`;
 
 function textField(value: string | null = null) {
-  return { value, confidence: 0.9, evidence: [], supported_by: [], decision_reason: null };
+  return { value, confidence: 0.9, evidence: [], notes: [] };
 }
 
 function extractedCandidate() {
   return buildCaptureImportCandidate({
-    extractors: {},
-    combined: {
-      model_role: "combiner",
-      canonical_fields: {
-        wineryName: textField("Producer"),
-        brandName: textField(),
-        displayName: textField(),
-        vintage: textField("2024"),
-        wineType: textField(wineType),
-        wineColor: textField("white"),
-        grapeVarieties: { ...textField(), value: ["Chardonnay"] },
-        country: textField(),
-        region: textField(),
-        appellation: textField(),
-        classification: textField(),
-        alcoholPercent: textField(),
-        bottleVolumeMl: textField("750 ml"),
-        addressQualification: textField(addressQualification),
-        barcode: textField(),
-        lotCode: textField(),
-        description: textField(),
-        drinkingAdvice: textField(),
+    extraction: {
+      extractorId: "fixture",
+      model: "fixture",
+      result: {
+        model_role: "extractor",
+        bottle_same_across_images: true,
+        raw_text_by_image: [],
+        fields: {
+          wineryName: textField("Producer"),
+          brandName: textField(),
+          displayName: textField(),
+          vintage: textField("2024"),
+          wineType: textField(wineType),
+          wineColor: textField("white"),
+          grapeVarieties: { ...textField(), value: ["Chardonnay"] },
+          country: textField(),
+          region: textField(),
+          appellation: textField(),
+          classification: textField(),
+          alcoholPercent: textField(),
+          bottleVolumeMl: textField("750 ml"),
+          addressQualification: textField(addressQualification),
+          barcode: textField(),
+          lotCode: textField(),
+          description: textField(),
+          drinkingAdvice: textField(),
+        },
+        canonical_label_text_lines: [],
+        warnings: ["Check label"],
+        overall_confidence: 0.9,
       },
-      canonical_label_text_lines: [],
-      field_disagreements: [],
-      requires_human_review: true,
-      human_review_reasons: ["Check label"],
-      overall_confidence: 0.9,
     },
   }).candidate;
 }

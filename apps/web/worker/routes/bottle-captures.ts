@@ -27,10 +27,9 @@ import {
   listBottleCaptures,
   listBottleCaptureStatuses,
   reserveCaptureRetry,
-  updateCaptureStatus,
 } from "../capture-store.ts";
 import { deleteBottleCaptureData, tryDrainR2ObjectDeletionQueue } from "../deletion.ts";
-import { errorDetails, logError } from "../observability.ts";
+import { ensureCaptureWorkflowStarted } from "../capture-start.ts";
 
 const manualImportSchema = z.object({
   wineVintageId: entityIdSchema.optional(),
@@ -110,60 +109,20 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       storageLocationId,
       userId: authenticatedUser.userId,
     });
-    if (capture.status === "replayed") {
-      return created(
-        await captureSubmissionResult({
-          captureId: capture.captureId,
-          database,
-          userId: authenticatedUser.userId,
-        }),
-      );
-    }
-    if (capture.status === "upload_failed") {
-      return created({
-        captureId: capture.captureId,
-        errorMessage: capture.errorMessage,
-        workflowInstanceId: null,
-        intakeComplete: false,
-      });
-    }
-    try {
-      const instance = await context.env.BOTTLE_CAPTURE_WORKFLOW.create({
-        id: capture.captureId,
-        params: { captureId: capture.captureId },
-      });
-      return created({
-        captureId: capture.captureId,
-        workflowInstanceId: instance.id,
-        intakeComplete: true,
-      });
-    } catch (error) {
-      const details = errorDetails(error);
-      const errorMessage =
-        "Capture was saved, but extraction startup could not be confirmed. Refresh capture status before retrying.";
-      logError("bottle_capture_workflow_start_failed", {
-        captureId: capture.captureId,
-        error: details,
-        fileCount: files.length,
-        siteId,
-        storageLocationId,
-      });
-      await updateCaptureStatus({
+    if (capture.status !== "upload_failed") {
+      await ensureCaptureWorkflowStarted({
         captureId: capture.captureId,
         database,
-        status: "failed",
-        workflowInstanceId: capture.captureId,
-        expectedStatus: "queued",
-        errorMessage,
-        errorDetail: details,
-      });
-      return created({
-        captureId: capture.captureId,
-        errorMessage,
-        workflowInstanceId: null,
-        intakeComplete: true,
+        workflow: context.env.BOTTLE_CAPTURE_WORKFLOW,
       });
     }
+    return created(
+      await captureSubmissionResult({
+        captureId: capture.captureId,
+        database,
+        userId: authenticatedUser.userId,
+      }),
+    );
   })
   .get("/bottle-captures/:captureId", async (context) => {
     const database = createD1Client(context.env.DB);
@@ -239,33 +198,32 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       siteId: capture.siteId,
       userId: authenticatedUser.userId,
     });
-    if (!canRetryCapture(capture.status)) {
-      throw new HTTPException(409, { message: "Capture is not retryable" });
+    if (capture.status !== "queued") {
+      if (!canRetryCapture(capture.status)) {
+        throw new HTTPException(409, { message: "Capture is not retryable" });
+      }
+      if (
+        !(await reserveCaptureRetry({
+          captureId: capture.id,
+          database,
+          workflowInstanceId: crypto.randomUUID(),
+          expectedWorkflowInstanceId: capture.workflowInstanceId,
+          expectedReviewRevision: capture.reviewRevision,
+          siteId: capture.siteId,
+          userId: authenticatedUser.userId,
+        }))
+      ) {
+        throw new HTTPException(409, {
+          message: "Capture processing or saved corrections changed",
+        });
+      }
     }
-    const workflowInstanceId = `${capture.id}-${crypto.randomUUID()}`;
-    if (!(await reserveCaptureRetry({ captureId: capture.id, database, workflowInstanceId }))) {
-      throw new HTTPException(409, { message: "Capture processing is already in progress" });
-    }
-    try {
-      await context.env.BOTTLE_CAPTURE_WORKFLOW.create({
-        id: workflowInstanceId,
-        params: { captureId: capture.id },
-      });
-    } catch (error) {
-      await updateCaptureStatus({
-        captureId: capture.id,
-        database,
-        workflowInstanceId,
-        status: "failed",
-        expectedStatus: "queued",
-        errorMessage: "Capture was saved, but extraction did not start. Retry the capture.",
-        errorDetail: errorDetails(error),
-      });
-      throw new HTTPException(503, {
-        message: "Could not confirm extraction started. Refresh capture status before retrying.",
-      });
-    }
-    return context.json({ data: { captureId: capture.id, workflowInstanceId } });
+    const started = await ensureCaptureWorkflowStarted({
+      captureId: capture.id,
+      database,
+      workflow: context.env.BOTTLE_CAPTURE_WORKFLOW,
+    });
+    return context.json({ data: { captureId: capture.id, ...started } });
   })
   .patch("/bottle-captures/:captureId/review", async (context) => {
     const payload = z
@@ -297,6 +255,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       database,
       candidate: payload.candidate,
       expectedRevision: payload.expectedRevision,
+      siteId: capture.siteId,
+      userId: user.userId,
     });
     return context.json({ data: { reviewRevision, reviewCandidate: payload.candidate } });
   })
@@ -344,9 +304,11 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       extractionIssues.success ? (extractionIssues.data.validationIssues ?? []) : []
     ).filter((issue) => {
       if (payload.wineVintageId !== undefined && issue.path.startsWith("wine.")) return false;
-      return (
-        capture.reviewCandidate === null ||
-        (issue.path === "bottle.volumeMl" && capture.reviewCandidate.bottle.volumeMl === undefined)
+      if (capture.reviewCandidate === null) return true;
+      const [section, field] = issue.path.split(".");
+      if ((section !== "wine" && section !== "bottle") || field === undefined) return true;
+      return !Object.entries(capture.reviewCandidate[section]).some(
+        ([name, value]) => name === field && value !== undefined,
       );
     });
     if (unresolved.length > 0) {
@@ -381,6 +343,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
         captureId: capture.id,
         database,
         expectedReviewRevision: payload.expectedReviewRevision,
+        siteId: capture.siteId,
+        userId: authenticatedUser.userId,
       }));
     const imported = await importReviewedCapture({
       candidate,
@@ -392,6 +356,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       siteId: capture.siteId,
       wineVintageId: payload.wineVintageId,
       expectedReviewRevision: payload.expectedReviewRevision,
+      userId: authenticatedUser.userId,
     });
     return context.json({ data: imported });
   })
@@ -423,6 +388,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     const deleted = await deleteBottleCaptureData({
       captureId: capture.id,
       database: context.env.DB,
+      siteId: capture.siteId,
+      userId: authenticatedUser.userId,
     });
     if (!deleted) {
       throw new HTTPException(409, {

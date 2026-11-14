@@ -2,19 +2,17 @@ import { createD1Client } from "@chikachow/booze-db";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 
 import type { Bindings, BottleCaptureWorkflowParams } from "./api/types.ts";
-import { importBottleCandidate, matchBottleCandidate } from "./bottle-importer.ts";
 import {
   buildCaptureImportCandidate,
-  defaultBottleExtractorConfigs,
   extractCaptureLabelEvidence,
-  extractorsFromCaptureResults,
-  reconcileCaptureLabelEvidence,
   type CaptureExtractorResult,
-  type CaptureReconciliationResult,
-  type CaptureImportReviewDecision,
   type ImportCandidate,
 } from "./bottle-extractor.ts";
-import { bottleExtractorId, type BottleOcrDiagnostic } from "./bottle-ocr.ts";
+import {
+  BottleOcrError,
+  defaultBottleExtractorId,
+  type BottleOcrDiagnostic,
+} from "./bottle-ocr.ts";
 import { putCaptureRunArtifact, type CaptureRunArtifact } from "./capture-artifacts.ts";
 import {
   createCaptureRun,
@@ -30,21 +28,7 @@ type CaptureRunContext = {
   readonly capture: CaptureWorkflowRecord;
   readonly runId: string;
 };
-
-type CaptureImportCandidate = {
-  readonly candidate: ImportCandidate;
-  readonly imageText: unknown;
-  readonly model: string;
-  readonly reviewDecision: CaptureImportReviewDecision;
-};
-type CaptureImportResult =
-  | Awaited<ReturnType<typeof importBottleCandidate>>
-  | {
-      readonly kind: "needs_review";
-      readonly matchResult: Awaited<ReturnType<typeof matchBottleCandidate>>;
-      readonly reason: "ocr_human_review_required";
-      readonly reviewReasons: readonly string[];
-    };
+type CaptureDraft = ReturnType<typeof buildCaptureImportCandidate>;
 
 export class BottleCaptureWorkflow extends WorkflowEntrypoint<
   Bindings,
@@ -55,94 +39,72 @@ export class BottleCaptureWorkflow extends WorkflowEntrypoint<
     step: WorkflowStep,
   ): Promise<unknown> {
     const captureId = event.payload.captureId;
+    const workflowInstanceId = event.instanceId;
     let failedStage = "start capture workflow";
     let runContext: CaptureRunContext | null = null;
-
     try {
-      if (
-        !(await markCaptureExtracting({
+      const started = await step.do("mark capture extracting", async () =>
+        beginCaptureWorkflow({
           captureId,
-          env: this.env,
-          step,
-          workflowInstanceId: event.instanceId,
-        }))
-      ) {
-        return { captureId, status: "skipped" };
-      }
+          database: createD1Client(this.env.DB),
+          workflowInstanceId,
+        }),
+      );
+      if (!started) return { captureId, status: "skipped" };
 
       failedStage = "create capture run";
-      runContext = await createCaptureRunContext({
-        captureId,
-        env: this.env,
-        step,
-        workflowInstanceId: event.instanceId,
+      runContext = await step.do("create capture run", async () => {
+        const database = createD1Client(this.env.DB);
+        const run = await createCaptureRun({
+          captureId,
+          database,
+          runId: `run_${workflowInstanceId}`,
+          workflowInstanceId,
+        });
+        if (run === null) return null;
+        return { capture: await getCaptureForWorkflow({ captureId, database }), runId: run.runId };
       });
+      if (runContext === null) return { captureId, status: "skipped" };
       const context = runContext;
 
       failedStage = "extract label evidence";
-      const extractorResults = await runExtractorSteps({
+      const extraction = await runExtractorStep({
         captureId,
         context,
         env: this.env,
         step,
+        workflowInstanceId,
       });
-      const extractors = extractorsFromCaptureResults(extractorResults);
-
-      failedStage = "reconcile extractor evidence";
-      const reconciliation = await runReconciliationStep({
-        captureId,
-        context,
-        env: this.env,
-        extractors,
-        step,
-      });
-
-      failedStage = "build import candidate";
-      const extracted = buildCaptureImportCandidate({
-        combined: reconciliation.combined,
-        extractors,
-      });
+      if (extraction === null) return { captureId, status: "skipped" };
+      const draft = buildCaptureImportCandidate({ extraction });
 
       failedStage = "write extraction artifact";
-      const extractionArtifact = await writeExtractionArtifact({
+      const artifact = await writeExtractionArtifact({
         captureId,
         context,
         env: this.env,
-        extracted,
-        extractorResults,
-        reconciliation,
+        draft,
+        extraction,
         step,
+        workflowInstanceId,
       });
-      const importCandidate = compactImportCandidate(extracted.candidate);
-
-      failedStage = "import capture candidate";
-      const imported = await importCaptureCandidateStep({
-        captureId,
-        context,
-        env: this.env,
-        extracted,
-        step,
-        workflowInstanceId: event.instanceId,
-      });
+      if (artifact === null) return { captureId, status: "skipped" };
 
       failedStage = "record capture result";
-      await recordCaptureResult({
+      const recorded = await recordCaptureResult({
         captureId,
         context,
         env: this.env,
-        extracted,
-        extractionArtifact,
-        importCandidate,
-        imported,
+        draft,
+        artifact,
         step,
-        workflowInstanceId: event.instanceId,
+        workflowInstanceId,
       });
-
-      return { captureId, status: imported.kind };
+      return { captureId, status: recorded ? "needs_review" : "skipped" };
     } catch (error) {
       const database = createD1Client(this.env.DB);
       const message = shortErrorMessage(error, failedStage);
-      const errorDetailArtifact =
+      const artifact =
         runContext === null
           ? null
           : await tryPutErrorArtifact({
@@ -159,14 +121,17 @@ export class BottleCaptureWorkflow extends WorkflowEntrypoint<
           runId: runContext.runId,
           status: "failed",
           errorMessage: message,
-          ...(errorDetailArtifact === null ? {} : { errorDetailArtifact }),
+          captureOwner: { captureId, workflowInstanceId, expectedCaptureStatus: "extracting" },
+          ...(artifact === null ? {} : { errorDetailArtifact: artifact }),
         });
       }
       await updateCaptureStatus({
         captureId,
         database,
         status: "failed",
-        workflowInstanceId: event.instanceId,
+        workflowInstanceId,
+        expectedStatus: "extracting",
+        ...(runContext === null ? {} : { runId: runContext.runId }),
         errorMessage: message,
         errorDetail: runContext === null ? errorDetails(error) : null,
       });
@@ -175,123 +140,70 @@ export class BottleCaptureWorkflow extends WorkflowEntrypoint<
   }
 }
 
-async function markCaptureExtracting({
+async function activeRun({
   captureId,
+  context,
   env,
-  step,
   workflowInstanceId,
 }: {
   readonly captureId: string;
+  readonly context: CaptureRunContext;
   readonly env: Bindings;
-  readonly step: WorkflowStep;
   readonly workflowInstanceId: string;
 }): Promise<boolean> {
-  return step.do("mark capture extracting", async () => {
-    const database = createD1Client(env.DB);
-    return beginCaptureWorkflow({
-      captureId,
-      database,
-      workflowInstanceId,
-    });
+  // Recheck current state inside every fresh side-effect step. Old deployments
+  // may have cached start/run contexts without Workflow ownership fields.
+  return updateCaptureStatus({
+    captureId,
+    database: createD1Client(env.DB),
+    runId: context.runId,
+    workflowInstanceId,
+    status: "extracting",
+    expectedStatus: "extracting",
   });
 }
 
-async function createCaptureRunContext({
-  captureId,
-  env,
-  step,
-  workflowInstanceId,
-}: {
+async function runExtractorStep(args: {
   readonly captureId: string;
+  readonly context: CaptureRunContext;
   readonly env: Bindings;
   readonly step: WorkflowStep;
   readonly workflowInstanceId: string;
-}): Promise<CaptureRunContext> {
-  return step.do("create capture run", async () => {
-    const database = createD1Client(env.DB);
-    const capture = await getCaptureForWorkflow({ captureId, database });
-    const run = await createCaptureRun({
-      captureId,
-      database,
-      runId: `run_${workflowInstanceId}`,
-      status: "extracting",
-    });
-    return { capture, runId: run.runId };
-  });
-}
-
-async function runExtractorSteps({
-  captureId,
-  context,
-  env,
-  step,
-}: {
-  readonly captureId: string;
-  readonly context: CaptureRunContext;
-  readonly env: Bindings;
-  readonly step: WorkflowStep;
-}): Promise<readonly CaptureExtractorResult[]> {
-  const results: CaptureExtractorResult[] = [];
-  // Each model call prepares image buffers and serializes a request. Keep only
-  // one such payload in memory while retaining separate durable retry steps.
-  for (const extractor of defaultBottleExtractorConfigs) {
-    results.push(await runExtractorStep({ captureId, context, env, extractor, step }));
-  }
-  return results;
-}
-
-async function runExtractorStep({
-  captureId,
-  context,
-  env,
-  extractor,
-  step,
-}: {
-  readonly captureId: string;
-  readonly context: CaptureRunContext;
-  readonly env: Bindings;
-  readonly extractor: (typeof defaultBottleExtractorConfigs)[number];
-  readonly step: WorkflowStep;
-}): Promise<CaptureExtractorResult> {
-  const extractorId = bottleExtractorId(extractor);
+}): Promise<CaptureExtractorResult | null> {
+  const { captureId, context, env, step } = args;
   return step.do(
-    `extract label evidence with ${extractorId}`,
+    `extract label evidence with ${defaultBottleExtractorId}`,
     {
-      retries: {
-        limit: 1,
-        delay: "5 minutes",
-        backoff: "constant",
-      },
+      retries: { limit: 1, delay: "5 minutes", backoff: "constant" },
       timeout: "8 minutes",
     },
     async () => {
+      if (!(await activeRun(args))) return null;
       const diagnostics: BottleOcrDiagnostic[] = [];
       try {
-        const extracted = await extractCaptureLabelEvidence({
+        const extraction = await extractCaptureLabelEvidence({
           bucket: env.IMAGE_BUCKET,
           images: env.IMAGES,
           capture: context.capture,
           diagnostics,
-          extractor,
           gatewayToken: env.CF_AIG_TOKEN,
           gatewayUrl: env.AI_GATEWAY_URL,
         });
         logInfo("bottle_capture_extractor_completed", {
           captureId,
           diagnosticCount: diagnostics.length,
-          extractorId: extracted.extractorId,
-          model: extracted.model,
+          extractorId: extraction.extractorId,
+          model: extraction.model,
           runId: context.runId,
           siteId: context.capture.siteId,
         });
-        return { ...extracted, diagnostics };
+        return { ...extraction, diagnostics };
       } catch (error) {
         logError("bottle_capture_extractor_failed", {
           captureId,
           diagnostics,
           error: errorDetails(error),
-          extractorId,
-          model: extractor.model,
+          extractorId: defaultBottleExtractorId,
           runId: context.runId,
           siteId: context.capture.siteId,
         });
@@ -301,78 +213,18 @@ async function runExtractorStep({
   );
 }
 
-async function runReconciliationStep({
-  captureId,
-  context,
-  env,
-  extractors,
-  step,
-}: {
+async function writeExtractionArtifact(args: {
   readonly captureId: string;
   readonly context: CaptureRunContext;
   readonly env: Bindings;
-  readonly extractors: Parameters<typeof reconcileCaptureLabelEvidence>[0]["extractors"];
+  readonly draft: CaptureDraft;
+  readonly extraction: CaptureExtractorResult;
   readonly step: WorkflowStep;
-}): Promise<CaptureReconciliationResult> {
-  return step.do(
-    "reconcile extractor evidence",
-    {
-      retries: {
-        limit: 1,
-        delay: "5 minutes",
-        backoff: "constant",
-      },
-      timeout: "8 minutes",
-    },
-    async (): Promise<CaptureReconciliationResult> => {
-      const diagnostics: BottleOcrDiagnostic[] = [];
-      try {
-        const reconciled = await reconcileCaptureLabelEvidence({
-          diagnostics,
-          extractors,
-          gatewayToken: env.CF_AIG_TOKEN,
-          gatewayUrl: env.AI_GATEWAY_URL,
-        });
-        logInfo("bottle_capture_reconciliation_completed", {
-          captureId,
-          diagnosticCount: diagnostics.length,
-          model: reconciled.model,
-          runId: context.runId,
-          siteId: context.capture.siteId,
-        });
-        return { ...reconciled, diagnostics };
-      } catch (error) {
-        logError("bottle_capture_reconciliation_failed", {
-          captureId,
-          diagnostics,
-          error: errorDetails(error),
-          runId: context.runId,
-          siteId: context.capture.siteId,
-        });
-        throw error;
-      }
-    },
-  );
-}
-
-async function writeExtractionArtifact({
-  captureId,
-  context,
-  env,
-  extracted,
-  extractorResults,
-  reconciliation,
-  step,
-}: {
-  readonly captureId: string;
-  readonly context: CaptureRunContext;
-  readonly env: Bindings;
-  readonly extracted: CaptureImportCandidate;
-  readonly extractorResults: readonly CaptureExtractorResult[];
-  readonly reconciliation: CaptureReconciliationResult;
-  readonly step: WorkflowStep;
-}): Promise<CaptureRunArtifact> {
+  readonly workflowInstanceId: string;
+}): Promise<CaptureRunArtifact | null> {
+  const { captureId, context, env, draft, extraction, step, workflowInstanceId } = args;
   return step.do("write extraction artifact", async () => {
+    if (!(await activeRun(args))) return null;
     const artifact = await putCaptureRunArtifact({
       bucket: env.IMAGE_BUCKET,
       captureId,
@@ -380,68 +232,37 @@ async function writeExtractionArtifact({
       runId: context.runId,
       siteId: context.capture.siteId,
       value: {
+        schemaVersion: "capture-extraction-v2",
         captureId,
-        extractors: extractorResults,
-        imageText: extracted.imageText,
-        importCandidate: extracted.candidate,
-        model: extracted.model,
-        reconciliation,
-        reviewDecision: extracted.reviewDecision,
         runId: context.runId,
+        workflowInstanceId,
+        images: context.capture.images,
+        quantity: context.capture.quantity,
+        extractor: {
+          ...extraction,
+          // Cached extraction steps predate raw provider-response retention.
+          // Record that gap rather than inventing a response or configuration.
+          configuration: extraction.configuration ?? null,
+          rawResponse: extraction.rawResponse ?? null,
+          provenance:
+            extraction.configuration === undefined
+              ? "legacy_workflow_checkpoint"
+              : "capture-extraction-v2",
+        },
+        importCandidate: draft.candidate,
+        reviewReasons: draft.reviewReasons,
       },
     });
     await updateCaptureRun({
       database: createD1Client(env.DB),
       runId: context.runId,
       status: "extracting",
+      captureOwner: { captureId, workflowInstanceId, expectedCaptureStatus: "extracting" },
       extractionArtifact: artifact,
-      importCandidate: compactImportCandidate(extracted.candidate),
-      model: extracted.model,
+      importCandidate: compactImportCandidate(draft.candidate),
+      model: extraction.model,
     });
     return artifact;
-  });
-}
-
-async function importCaptureCandidateStep({
-  captureId,
-  context,
-  env,
-  extracted,
-  step,
-  workflowInstanceId,
-}: {
-  readonly captureId: string;
-  readonly context: CaptureRunContext;
-  readonly env: Bindings;
-  readonly extracted: CaptureImportCandidate;
-  readonly step: WorkflowStep;
-  readonly workflowInstanceId: string;
-}): Promise<CaptureImportResult> {
-  return step.do("import capture candidate", async () => {
-    const database = createD1Client(env.DB);
-    if (extracted.reviewDecision.kind === "needs_review") {
-      return {
-        kind: "needs_review",
-        matchResult: await matchBottleCandidate({
-          candidate: extracted.candidate,
-          database,
-          siteId: context.capture.siteId,
-        }),
-        reason: extracted.reviewDecision.reason,
-        reviewReasons: extracted.reviewDecision.reasons,
-      };
-    }
-    return importBottleCandidate({
-      candidate: extracted.candidate,
-      captureId,
-      database,
-      runId: context.runId,
-      // Read identity from the event, not the cached run context: checkpoints
-      // written by older deployments do not include workflowInstanceId.
-      workflowInstanceId,
-      quantity: context.capture.quantity,
-      siteId: context.capture.siteId,
-    });
   });
 }
 
@@ -449,69 +270,49 @@ async function recordCaptureResult({
   captureId,
   context,
   env,
-  extracted,
-  extractionArtifact,
-  importCandidate,
-  imported,
+  draft,
+  artifact,
   step,
   workflowInstanceId,
 }: {
   readonly captureId: string;
   readonly context: CaptureRunContext;
   readonly env: Bindings;
-  readonly extracted: CaptureImportCandidate;
-  readonly extractionArtifact: CaptureRunArtifact;
-  readonly importCandidate: ImportCandidate;
-  readonly imported: CaptureImportResult;
+  readonly draft: CaptureDraft;
+  readonly artifact: CaptureRunArtifact;
   readonly step: WorkflowStep;
   readonly workflowInstanceId: string;
-}): Promise<void> {
-  await step.do("record capture result", async () => {
+}): Promise<boolean> {
+  return step.do("record reviewed capture draft", async () => {
     const database = createD1Client(env.DB);
+    const result = {
+      kind: "needs_review",
+      reason: "human_confirmation_required",
+      reviewReasons: draft.reviewReasons,
+      matchResult: null,
+    };
     await updateCaptureRun({
       database,
       runId: context.runId,
-      status: imported.kind,
-      extractionArtifact,
-      importCandidate,
-      importResult: imported,
-      matchResult: imported.matchResult,
-      model: extracted.model,
+      status: "needs_review",
+      captureOwner: { captureId, workflowInstanceId, expectedCaptureStatus: "extracting" },
+      extractionArtifact: artifact,
+      importCandidate: compactImportCandidate(draft.candidate),
+      importResult: result,
+      matchResult: null,
     });
-    switch (imported.kind) {
-      case "imported":
-        await updateCaptureStatus({
-          captureId,
-          database,
-          status: "imported",
-          errorMessage: null,
-          errorDetail: null,
-          importedBottleIds: imported.bottleIds,
-          workflowInstanceId,
-        });
-        break;
-      case "needs_review":
-        await updateCaptureStatus({
-          captureId,
-          database,
-          status: "needs_review",
-          workflowInstanceId,
-        });
-        break;
-      case "skipped":
-        break;
-      default: {
-        const exhaustive: never = imported;
-        return exhaustive;
-      }
-    }
-    return { captureId, status: imported.kind };
+    return updateCaptureStatus({
+      captureId,
+      database,
+      status: "needs_review",
+      workflowInstanceId,
+      runId: context.runId,
+      expectedStatus: "extracting",
+    });
   });
 }
 
-function compactImportCandidate(
-  candidate: CaptureImportCandidate["candidate"],
-): CaptureImportCandidate["candidate"] {
+function compactImportCandidate(candidate: ImportCandidate): ImportCandidate {
   return { ...candidate, rawSuggestion: {} };
 }
 
@@ -545,7 +346,13 @@ async function tryPutErrorArtifact({
       kind: "error",
       runId,
       siteId,
-      value: { captureId, error: errorDetails(error), failedStage, runId },
+      value: {
+        captureId,
+        error: errorDetails(error),
+        failedStage,
+        runId,
+        ...(error instanceof BottleOcrError ? { rawResponse: error.rawResponse } : {}),
+      },
     });
   } catch (artifactError) {
     logError("capture_error_artifact_write_failed", {

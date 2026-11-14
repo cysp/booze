@@ -17,6 +17,7 @@ function setup(
   const sqlite = migratedDatabase();
   sqlite.exec(`INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user');
     INSERT INTO sites (id, name) VALUES ('site', 'Site')`);
+  sqlite.exec("INSERT INTO site_memberships(site_id,user_id,role) VALUES('site','user','owner')");
   const storage = multipartBucket(hooks(sqlite));
   const d1 = asD1(sqlite);
   const input = {
@@ -103,7 +104,10 @@ await describe("capture intake ownership races", async () => {
       await entered.promise;
       assert.equal(fixture.objects.size, 1);
       try {
-        assert.equal(await deleteSiteData({ database: fixture.d1, siteId: "site" }), true);
+        assert.equal(
+          await deleteSiteData({ database: fixture.d1, siteId: "site", userId: "user" }),
+          true,
+        );
         await drainR2ObjectDeletionQueue({ bucket: fixture.bucket, database: fixture.d1 });
       } finally {
         release.resolve();
@@ -282,6 +286,8 @@ await describe("capture intake ownership races", async () => {
           await deleteBottleCaptureData({
             captureId: captureId(fixture.sqlite),
             database: fixture.d1,
+            siteId: "site",
+            userId: "user",
           }),
           true,
         );
@@ -329,6 +335,8 @@ await describe("capture intake ownership races", async () => {
           await deleteBottleCaptureData({
             captureId: captureId(fixture.sqlite),
             database: fixture.d1,
+            siteId: "site",
+            userId: "user",
           }),
           true,
         );

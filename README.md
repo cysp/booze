@@ -1,6 +1,6 @@
 # Booze
 
-A private wine-cellar catalogue for finding, adding, moving, and consuming physical bottles from a phone. Wines and vintages hold shared facts; bottles hold individual facts and positions. Photo capture assists entry, with uncertain results kept for human review.
+A private wine-cellar catalogue for finding, adding, moving, and consuming physical bottles from a phone. Wine vintages hold shared facts; bottles hold individual facts and positions. Photo capture prepares a draft for human confirmation.
 
 ## Development
 
@@ -36,15 +36,17 @@ The checks include migrated SQLite and D1 upgrade tests, React interaction tests
 
 ## Project layout
 
-| Location                                               | Responsibility                                                  |
-| ------------------------------------------------------ | --------------------------------------------------------------- |
-| `apps/web/src`                                         | React user flows, form state, and catalogue refresh             |
-| `apps/web/worker/routes`                               | HTTP authentication, input validation, and responses            |
-| `apps/web/worker/api`                                  | Site permissions, catalogue writes, and inventory reads         |
-| `apps/web/worker/mcp`                                  | Bounded, site-authorised tools and transactional write auditing |
-| `apps/web/worker/bottle-*`, `capture-*`, `deletion.ts` | Durable capture processing and image lifecycle                  |
-| `packages/db`                                          | Drizzle schema and append-only D1 migrations                    |
+| Location                                               | Responsibility                                             |
+| ------------------------------------------------------ | ---------------------------------------------------------- |
+| `apps/web/src`                                         | React user flows, drafts, and active-page reads            |
+| `apps/web/shared`                                      | Canonical resources, input contracts, and domain values    |
+| `apps/web/worker/routes`                               | HTTP authentication, input validation, and responses       |
+| `apps/web/worker/*-operations.ts`                      | Complete catalogue changes, permission guards, and audit   |
+| `apps/web/worker/api`                                  | Scoped queries, domain preparation, and request boundaries |
+| `apps/web/worker/mcp`                                  | Bounded, site-authorised adapters to shared operations     |
+| `apps/web/worker/bottle-*`, `capture-*`, `deletion.ts` | Durable capture processing and image lifecycle             |
+| `packages/db`                                          | Drizzle schema and append-only D1 migrations               |
 
 D1 is the source of truth. R2 stores images and extraction artifacts. Cloudflare Workflows coordinates extraction retries. The browser and MCP use the same site roles: owner, editor, and viewer.
 
-See [product intent](docs/product.md), [implementation status](docs/status.md), and the [project audit](docs/audit.md) for the domain model, constraints, and maintenance priorities.
+See [product intent](docs/product.md) for domain contracts, [implementation status](docs/status.md) for current capabilities and remaining work, and the [historical project audit](docs/audit.md) for earlier findings and evidence.

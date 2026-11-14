@@ -15,7 +15,7 @@
     },
   },
   "triggers": {
-    "crons": ["0 * * * *"],
+    "crons": ["*/5 * * * *"],
   },
   "assets": {
     "not_found_handling": "single-page-application",

@@ -415,7 +415,7 @@ export function useCaptureController({
       }
       savedResult = {
         kind: "submitted",
-        message: "Capture submitted. Extraction will run in the background.",
+        message: "Capture submitted. Review the extracted draft before adding bottles.",
       };
       addition.clear(form.siteId);
       setCaptureForm({
@@ -433,7 +433,7 @@ export function useCaptureController({
         await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
         return { kind: "saved_with_error", message: statusMessage };
       }
-      const statusMessage = "Capture submitted. Extraction will run in the background.";
+      const statusMessage = "Capture submitted. Review the extracted draft before adding bottles.";
       await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
       return { kind: "submitted", message: statusMessage };
     } catch (error) {
@@ -465,7 +465,10 @@ export function useCaptureController({
       return false;
     }
     trackPendingCapture?.(captureId);
-    await completeMutation({ refresh: "captures", successMessage: "Capture retry started." });
+    await completeMutation({
+      refresh: "captures",
+      successMessage: "Capture retry requested. Progress updates automatically.",
+    });
     return true;
   }
 
@@ -474,7 +477,7 @@ export function useCaptureController({
     wineVintageId?: string,
     options?: CaptureImportOptions,
   ): Promise<CaptureImportResult> {
-    setStatus("Importing capture...");
+    setStatus("Adding bottles from capture...");
     try {
       const response = await fetch(`/api/bottle-captures/${encodeURIComponent(captureId)}/import`, {
         method: "POST",
@@ -497,7 +500,7 @@ export function useCaptureController({
       setStatus(message);
       return { ok: false, message };
     }
-    await completeMutation({ refresh: "catalogue", successMessage: "Capture imported." });
+    await completeMutation({ refresh: "catalogue", successMessage: "Bottles added from capture." });
     return { ok: true };
   }
 

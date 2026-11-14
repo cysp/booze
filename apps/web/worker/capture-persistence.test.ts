@@ -3,10 +3,9 @@ import { describe, it } from "node:test";
 
 import { createD1Client } from "@chikachow/booze-db";
 
-import { importBottleCandidate, matchBottleCandidate } from "./bottle-importer.ts";
+import { importReviewedCapture } from "./bottle-importer.ts";
 import {
   beginCaptureWorkflow,
-  claimCaptureForImport,
   createCaptureRun,
   getBottleCapture,
   getCaptureImageObject,
@@ -28,10 +27,17 @@ await describe("capture persistence", async () => {
       INSERT INTO storage_locations (id, site_id, name) VALUES ('location', 'site', 'Rack');
       INSERT INTO bottle_captures (id, site_id, user_id, status, storage_location_id)
       VALUES ('capture', 'site', 'user', 'extracting', 'location');
+      UPDATE bottle_captures SET workflow_instance_id='workflow';
       CREATE TRIGGER fail_location BEFORE INSERT ON bottle_locations
       BEGIN SELECT RAISE(ABORT, 'injected location failure'); END;
     `);
-    await createCaptureRun({ captureId: "capture", database, runId: "run", status: "extracting" });
+    await createCaptureRun({
+      captureId: "capture",
+      database,
+      runId: "run",
+      workflowInstanceId: "workflow",
+    });
+    sqlite.exec("UPDATE bottle_captures SET status='needs_review'");
     const input = {
       candidate: {
         wine: { wineryName: "Test Winery", designation: "Reserve" },
@@ -45,9 +51,12 @@ await describe("capture persistence", async () => {
       runId: "run",
       siteId: "site",
       storageLocationId: "location",
+      workflowInstanceId: "workflow",
+      userId: "user",
+      expectedReviewRevision: 0,
     };
 
-    await assert.rejects(importBottleCandidate(input));
+    await assert.rejects(importReviewedCapture(input));
     for (const table of ["bottles", "bottle_locations", "wine_vintages", "wineries"]) {
       assert.equal(
         sqlite.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.["count"],
@@ -57,13 +66,13 @@ await describe("capture persistence", async () => {
     }
     assert.equal(
       sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"],
-      "importing",
+      "needs_review",
     );
     sqlite.exec("DROP TRIGGER fail_location");
 
-    const imported = await importBottleCandidate(input);
+    const imported = await importReviewedCapture(input);
     assert.equal(imported.kind, "imported");
-    assert.deepEqual(await importBottleCandidate(input), imported);
+    assert.deepEqual(await importReviewedCapture(input), imported);
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 24);
     assert.equal(
       sqlite.prepare("SELECT count(*) AS count FROM bottle_locations").get()?.["count"],
@@ -97,6 +106,104 @@ await describe("capture persistence", async () => {
     assert.deepEqual(sqlite.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
+  await it("reads legacy extractor evidence and artifact references without rewriting stored rows", async () => {
+    const sqlite = seededDatabase();
+    try {
+      const legacy = {
+        wine: {
+          wineryName: "Producer",
+          designation: "Reserve",
+          notes: "Extraction disagreements: vintage differs",
+        },
+        bottle: { volumeMl: 750 },
+        rawSuggestion: {
+          structuredExtraction: {
+            models: { extractors: { old: "old-extractor" }, combiner: "old-combiner" },
+            combined: {
+              field_disagreements: ["vintage differs"],
+              human_review_reasons: ["Check label"],
+            },
+            extractors: { old: { warnings: ["Obscured"] } },
+          },
+        },
+      };
+      sqlite.exec(
+        "INSERT INTO bottle_captures(id,site_id,user_id,status) VALUES('capture','site','user','needs_review')",
+      );
+      sqlite
+        .prepare(`INSERT INTO bottle_capture_runs(id,capture_id,status,extractor_version,prompt_version,schema_version,model,import_candidate_json,import_result_json,extraction_r2_key,extraction_content_type,extraction_size_bytes)
+        VALUES('legacy-run','capture','needs_review','old-extractor','old-prompt','old-schema','multi-extractor-combiner',?,?,'legacy/extraction.json','application/json',2345)`)
+        .run(
+          JSON.stringify(legacy),
+          JSON.stringify({
+            kind: "needs_review",
+            reviewReasons: ["vintage differs", "Check label"],
+          }),
+        );
+      const before = sqlite.prepare("SELECT * FROM bottle_capture_runs").get();
+      const capture = await getBottleCapture({
+        captureId: "capture",
+        database: createD1Client(asD1(sqlite)),
+        userId: "user",
+      });
+      assert.deepEqual(capture.latestRun?.importCandidate, legacy);
+      assert.deepEqual(capture.latestRun?.importResult, {
+        kind: "needs_review",
+        reviewReasons: ["vintage differs", "Check label"],
+      });
+      assert.equal(capture.latestRun?.extractionR2Key, "legacy/extraction.json");
+      assert.deepEqual(sqlite.prepare("SELECT * FROM bottle_capture_runs").get(), before);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  await it("replays a historical receipt before validating an obsolete candidate", async () => {
+    const sqlite = seededDatabase();
+    try {
+      const receipt = {
+        kind: "imported",
+        bottleIds: ["old-bottle"],
+        wineVintageId: "old-wine",
+        wineryId: null,
+        matchResult: {
+          kind: "reuse_wine_vintage",
+          wineryCandidates: [],
+          wineVintageCandidate: { id: "old-wine", label: "Old Wine" },
+          wineVintageCandidates: [],
+        },
+      };
+      sqlite.exec(
+        "INSERT INTO bottle_captures(id,site_id,user_id,status) VALUES('capture','site','user','imported')",
+      );
+      sqlite
+        .prepare(`INSERT INTO bottle_capture_runs(id,capture_id,status,extractor_version,prompt_version,schema_version,import_result_json,import_candidate_json)
+        VALUES('legacy-run','capture','imported','old','old','old',?,'obsolete-candidate')`)
+        .run(JSON.stringify(receipt));
+      const replayed = await importReviewedCapture({
+        captureId: "capture",
+        database: createD1Client(asD1(sqlite)),
+        runId: "legacy-run",
+        siteId: "site",
+        userId: "user",
+        quantity: 1,
+        workflowInstanceId: null,
+        expectedReviewRevision: 0,
+        candidate: { wine: { wineryName: "" }, bottle: { volumeMl: -1 }, rawSuggestion: {} },
+      });
+      assert.deepEqual(replayed, receipt);
+      assert.equal(
+        sqlite.prepare("SELECT import_candidate_json FROM bottle_capture_runs").get()?.[
+          "import_candidate_json"
+        ],
+        "obsolete-candidate",
+      );
+      assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("reserves one retry and rejects stale Workflow claims", async () => {
     const sqlite = seededDatabase();
     sqlite.exec(
@@ -104,11 +211,27 @@ await describe("capture persistence", async () => {
     );
     const database = createD1Client(asD1(sqlite));
     assert.equal(
-      await reserveCaptureRetry({ captureId: "capture", database, workflowInstanceId: "new" }),
+      await reserveCaptureRetry({
+        captureId: "capture",
+        database,
+        workflowInstanceId: "new",
+        siteId: "site",
+        userId: "user",
+        expectedWorkflowInstanceId: null,
+        expectedReviewRevision: 0,
+      }),
       true,
     );
     assert.equal(
-      await reserveCaptureRetry({ captureId: "capture", database, workflowInstanceId: "other" }),
+      await reserveCaptureRetry({
+        captureId: "capture",
+        database,
+        workflowInstanceId: "other",
+        siteId: "site",
+        userId: "user",
+        expectedWorkflowInstanceId: "new",
+        expectedReviewRevision: 0,
+      }),
       false,
     );
     assert.equal(
@@ -116,17 +239,12 @@ await describe("capture persistence", async () => {
       false,
     );
     assert.equal(
-      await beginCaptureWorkflow({ captureId: "capture", database, workflowInstanceId: "new" }),
-      true,
-    );
-    assert.equal(
-      await claimCaptureForImport({
+      await beginCaptureWorkflow({
         captureId: "capture",
         database,
-        runId: "same-run",
-        siteId: "site",
+        workflowInstanceId: "new",
       }),
-      null,
+      true,
     );
     await updateCaptureStatus({
       captureId: "capture",
@@ -142,13 +260,13 @@ await describe("capture persistence", async () => {
       captureId: "capture",
       database,
       runId: "same-run",
-      status: "extracting",
+      workflowInstanceId: "new",
     });
     await createCaptureRun({
       captureId: "capture",
       database,
       runId: "same-run",
-      status: "extracting",
+      workflowInstanceId: "new",
     });
     assert.equal(
       sqlite.prepare("SELECT count(*) AS count FROM bottle_capture_runs").get()?.["count"],
@@ -173,7 +291,12 @@ await describe("capture persistence", async () => {
     const first = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     await updateCaptureStatus({ captureId: first.captureId, database, status: "failed" });
     const originalKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
-    await deleteBottleCaptureData({ captureId: first.captureId, database: asD1(sqlite) });
+    await deleteBottleCaptureData({
+      captureId: first.captureId,
+      database: asD1(sqlite),
+      siteId: "site",
+      userId: "user",
+    });
     const second = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     assert.equal(second.status, "queued");
     const newKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
@@ -263,7 +386,12 @@ await describe("capture persistence", async () => {
       userId: "user",
     });
     assert.equal(
-      await deleteBottleCaptureData({ captureId: capture.captureId, database: asD1(sqlite) }),
+      await deleteBottleCaptureData({
+        captureId: capture.captureId,
+        database: asD1(sqlite),
+        siteId: "site",
+        userId: "user",
+      }),
       false,
     );
     assert.equal(
@@ -278,7 +406,7 @@ await describe("capture persistence", async () => {
 
   await it("bounds capture summaries and hydrates selected detail with authorized image reads", async () => {
     const sqlite = seededDatabase();
-    sqlite.exec(`INSERT INTO site_memberships (site_id, user_id, role) VALUES ('site', 'user', 'owner');
+    sqlite.exec(`INSERT OR IGNORE INTO site_memberships (site_id, user_id, role) VALUES ('site', 'user', 'owner');
       INSERT INTO image_assets (id, site_id, sha256, r2_key, content_type, size_bytes, uploaded_by_user_id)
       VALUES ('image', 'site', 'sha', 'photo.jpg', 'image/jpeg', 1, 'user');`);
     for (let index = 0; index < 100; index += 1) {
@@ -345,40 +473,35 @@ await describe("capture persistence", async () => {
     );
   });
 
-  await it("does not match different non-Latin names or empty normalized identities", async () => {
-    const sqlite = seededDatabase();
-    sqlite.exec(`INSERT INTO wineries (id, site_id, name) VALUES ('winery', 'site', '甲酒庄');
-      INSERT INTO wine_vintages (id, site_id, winery_id, base_name, display_name, vintage_label)
-      VALUES ('wine', 'site', 'winery', '珍藏', '珍藏', 'NV');`);
-    const database = createD1Client(asD1(sqlite));
-    assert.equal(
-      (
-        await matchBottleCandidate({
-          database,
+  await it("creates a distinct wine for non-Latin or generic names unless an ID is selected", async () => {
+    for (const wineryName of ["乙酒庄", "Estate"]) {
+      const sqlite = seededDatabase();
+      try {
+        sqlite.exec(`INSERT INTO wineries (id, site_id, name) VALUES ('winery', 'site', '甲酒庄');
+          INSERT INTO wine_vintages (id, site_id, winery_id, base_name, display_name, vintage_label)
+          VALUES ('wine', 'site', 'winery', '珍藏', '珍藏', 'NV');
+          INSERT INTO bottle_captures (id,site_id,user_id,status) VALUES ('capture','site','user','needs_review');
+          INSERT INTO bottle_capture_runs (id,capture_id,status,extractor_version,prompt_version,schema_version) VALUES ('run','capture','needs_review','v1','v1','v1');`);
+        const result = await importReviewedCapture({
+          captureId: "capture",
+          database: createD1Client(asD1(sqlite)),
+          runId: "run",
           siteId: "site",
-          candidate: {
-            wine: { wineryName: "乙酒庄", designation: "珍藏" },
-            bottle: {},
-            rawSuggestion: {},
-          },
-        })
-      ).kind,
-      "create_new",
-    );
-    assert.equal(
-      (
-        await matchBottleCandidate({
-          database,
-          siteId: "site",
-          candidate: {
-            wine: { wineryName: "Estate", designation: "Reserve" },
-            bottle: {},
-            rawSuggestion: {},
-          },
-        })
-      ).kind,
-      "needs_review",
-    );
+          userId: "user",
+          quantity: 1,
+          workflowInstanceId: null,
+          expectedReviewRevision: 0,
+          candidate: { wine: { wineryName, designation: "珍藏" }, bottle: {}, rawSuggestion: {} },
+        });
+        assert.notEqual(result.wineVintageId, "wine");
+        assert.equal(
+          sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"],
+          2,
+        );
+      } finally {
+        sqlite.close();
+      }
+    }
   });
 
   await it("preserves legacy partial bottles when a retry proposes a different wine", async () => {
@@ -387,11 +510,18 @@ await describe("capture persistence", async () => {
       INSERT INTO wine_vintages (id, site_id, winery_id, base_name, display_name, vintage_label)
       VALUES ('wine', 'site', 'winery', 'Reserve', 'Reserve', 'NV');
       INSERT INTO bottles (id, site_id, wine_vintage_id) VALUES ('bottle_capture-0', 'site', 'wine');
-      INSERT INTO bottle_captures (id, site_id, user_id, status) VALUES ('capture', 'site', 'user', 'extracting');`);
+      INSERT INTO bottle_captures (id, site_id, user_id, status) VALUES ('capture', 'site', 'user', 'extracting');
+      UPDATE bottle_captures SET workflow_instance_id='workflow';`);
     const database = createD1Client(asD1(sqlite));
-    await createCaptureRun({ captureId: "capture", database, runId: "run", status: "extracting" });
+    await createCaptureRun({
+      captureId: "capture",
+      database,
+      runId: "run",
+      workflowInstanceId: "workflow",
+    });
+    sqlite.exec("UPDATE bottle_captures SET status='needs_review'");
     await assert.rejects(
-      importBottleCandidate({
+      importReviewedCapture({
         candidate: {
           wine: { wineryName: "Different Winery", designation: "Reserve" },
           bottle: {},
@@ -402,6 +532,9 @@ await describe("capture persistence", async () => {
         quantity: 2,
         runId: "run",
         siteId: "site",
+        userId: "user",
+        workflowInstanceId: "workflow",
+        expectedReviewRevision: 0,
       }),
       /different wine/u,
     );
@@ -422,7 +555,7 @@ await describe("capture persistence", async () => {
 function seededDatabase() {
   const database = migratedDatabase();
   database.exec(
-    "INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user'); INSERT INTO sites (id, name) VALUES ('site', 'Cellar')",
+    "INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user'); INSERT INTO sites (id, name) VALUES ('site', 'Cellar'); INSERT INTO site_memberships(site_id,user_id,role) VALUES('site','user','owner')",
   );
   return database;
 }

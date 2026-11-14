@@ -1,5 +1,3 @@
-// oxlint-disable import/max-dependencies -- Capture import coordinates candidate validation, matching, ownership, and atomic inventory completion.
-import { storedVintageLabel, storedVintageStatus } from "./api/wine-vintage.ts";
 import {
   bottleCaptureRuns,
   bottleCaptures,
@@ -7,7 +5,6 @@ import {
   bottles,
   storageLocations,
   createD1Client,
-  wineries,
   wineVintages,
   type BoozeDatabase,
 } from "@chikachow/booze-db";
@@ -17,42 +14,18 @@ import { HTTPException } from "hono/http-exception";
 import { createBottleStatements, prepareWineVintage } from "./api/catalogue.ts";
 import { stableId } from "./api/ids.ts";
 import { retryCatalogueTransaction } from "./api/catalogue-transaction.ts";
-import { hasWineIdentity, wineVintageStatus } from "../shared/wine-identity.ts";
 import { bottleQuantitySchema, catalogueCandidateSchema } from "../shared/catalogue-inputs.ts";
 import type { ImportCandidate } from "./bottle-extractor.ts";
-import {
-  claimCaptureForImport,
-  latestCaptureRunId,
-  type CaptureImportClaim,
-} from "./capture-store.ts";
+import { commitOperation } from "./operation-transaction.ts";
+import { latestCaptureRunId, type CaptureImportClaim } from "./capture-store.ts";
 
-export type ImportReviewReason =
-  | "ambiguous_winery"
-  | "ambiguous_wine_vintage"
-  | "invalid_candidate"
-  | "missing_required_candidate"
-  | "possible_existing_wine"
-  | "saved_manual_corrections";
-
-export type BottleImportResult =
-  | {
-      readonly kind: "imported";
-      readonly bottleIds: readonly string[];
-      readonly wineVintageId: string;
-      readonly wineryId: string | null;
-      readonly matchResult: BottleMatchResult;
-    }
-  | {
-      readonly kind: "skipped";
-      readonly reason: "capture_import_already_claimed";
-      readonly matchResult: BottleMatchResult;
-    }
-  | {
-      readonly kind: "needs_review";
-      readonly reason: ImportReviewReason;
-      readonly matchResult: BottleMatchResult;
-      readonly reviewReasons?: readonly string[];
-    };
+export type BottleImportResult = {
+  readonly kind: "imported";
+  readonly bottleIds: readonly string[];
+  readonly wineVintageId: string;
+  readonly wineryId: string | null;
+  readonly matchResult: BottleMatchResult;
+};
 
 export type BottleMatchResult =
   | {
@@ -64,12 +37,6 @@ export type BottleMatchResult =
       readonly kind: "reuse_wine_vintage";
       readonly wineryCandidates: readonly MatchCandidate[];
       readonly wineVintageCandidate: MatchCandidate;
-      readonly wineVintageCandidates: readonly MatchCandidate[];
-    }
-  | {
-      readonly kind: "needs_review";
-      readonly reason: ImportReviewReason;
-      readonly wineryCandidates: readonly MatchCandidate[];
       readonly wineVintageCandidates: readonly MatchCandidate[];
     };
 
@@ -83,9 +50,12 @@ type CaptureImportInput = {
   readonly captureId: string;
   readonly database: BoozeDatabase;
   readonly quantity: number;
+  readonly userId: string;
   readonly siteId: string;
   readonly runId: string;
-  readonly workflowInstanceId?: string | null | undefined;
+  readonly workflowInstanceId: string | null;
+  readonly expectedReviewRevision: number;
+  readonly wineVintageId?: string | undefined;
 };
 
 export class CaptureImportConflictError extends HTTPException {
@@ -97,89 +67,9 @@ export class CaptureImportConflictError extends HTTPException {
   }
 }
 
-export async function importBottleCandidate(
+export async function importReviewedCapture(
   input: CaptureImportInput,
 ): Promise<BottleImportResult> {
-  const { candidate, captureId, database, runId, siteId, workflowInstanceId } = input;
-  return retryCatalogueTransaction(async (): Promise<BottleImportResult> => {
-    const committed = await getCommittedCaptureImport({ captureId, database, runId });
-    if (committed !== null) {
-      return committed;
-    }
-    const reviewReasons = candidateValidationReasons(candidate, input.quantity);
-    if (reviewReasons.length > 0) {
-      return {
-        kind: "needs_review",
-        reason: "invalid_candidate",
-        reviewReasons,
-        matchResult: invalidCandidateMatch(),
-      };
-    }
-    const validatedInput = validatedImportInput(input);
-    const [captureReview] = await database
-      .select({ candidate: bottleCaptures.reviewCandidateJson })
-      .from(bottleCaptures)
-      .where(eq(bottleCaptures.id, captureId))
-      .limit(1);
-    if (captureReview !== undefined && captureReview.candidate !== null) {
-      const matchResult = {
-        kind: "needs_review",
-        reason: "saved_manual_corrections",
-        wineryCandidates: [],
-        wineVintageCandidates: [],
-      } as const;
-      return { kind: "needs_review", reason: "saved_manual_corrections", matchResult };
-    }
-    const matchResult = await matchBottleCandidate({
-      candidate: validatedInput.candidate,
-      database,
-      siteId,
-    });
-    if (matchResult.kind === "needs_review") {
-      return {
-        kind: "needs_review",
-        reason: matchResult.reason,
-        matchResult,
-      };
-    }
-
-    const claim = await claimCaptureForImport({
-      captureId,
-      database,
-      runId,
-      siteId,
-      workflowInstanceId,
-    });
-    const skipped = {
-      kind: "skipped",
-      reason: "capture_import_already_claimed",
-      matchResult,
-    } satisfies BottleImportResult;
-    if (claim === null) return skipped;
-    try {
-      return await commitCaptureImport({
-        input: validatedInput,
-        claim,
-        matchResult,
-        wineVintageId:
-          matchResult.kind === "reuse_wine_vintage"
-            ? matchResult.wineVintageCandidate.id
-            : undefined,
-      });
-    } catch (error) {
-      if (!(error instanceof CaptureImportConflictError)) throw error;
-      return (await getCommittedCaptureImport({ captureId, database, runId })) ?? skipped;
-    }
-  });
-}
-
-export async function importReviewedCapture(
-  input: CaptureImportInput & {
-    readonly wineVintageId?: string | undefined;
-    readonly workflowInstanceId: string | null;
-    readonly expectedReviewRevision: number;
-  },
-): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
   const {
     captureId,
     database,
@@ -238,9 +128,9 @@ async function commitCaptureImport({
   readonly claim: CaptureImportClaim;
   readonly matchResult: BottleMatchResult;
   readonly wineVintageId: string | undefined;
-  readonly expectedReviewRevision?: number;
-}): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
-  const { candidate, database, quantity } = input;
+  readonly expectedReviewRevision: number;
+}): Promise<BottleImportResult> {
+  const { candidate, database, quantity, userId } = input;
   const { captureId, runId, siteId } = claim;
   const vintage =
     wineVintageId === undefined
@@ -262,7 +152,7 @@ async function commitCaptureImport({
     wineryId: vintage.wineryId,
     wineVintageId: vintage.wineVintageId,
     matchResult,
-  } satisfies Extract<BottleImportResult, { readonly kind: "imported" }>;
+  } satisfies BottleImportResult;
   await assertExistingBottlesMatch({
     bottleIds,
     database,
@@ -270,7 +160,7 @@ async function commitCaptureImport({
     wineVintageId: vintage.wineVintageId,
   });
   try {
-    await database.batch([
+    await commitOperation({ database, userId, source: "http" }, siteId, [
       captureImportGuardStatement({
         claim,
         database,
@@ -326,7 +216,7 @@ function captureImportGuardStatement({
 }: {
   readonly claim: CaptureImportClaim;
   readonly database: BoozeDatabase;
-  readonly expectedReviewRevision: number | undefined;
+  readonly expectedReviewRevision: number;
   readonly wineVintageId: string | undefined;
   readonly bottleIds: readonly string[];
   readonly targetWineVintageId: string;
@@ -342,11 +232,7 @@ function captureImportGuardStatement({
       captureId: sql`(SELECT ${bottleCaptures.id} FROM ${bottleCaptures}
         WHERE ${bottleCaptures.id} = ${claim.captureId}
           AND ${bottleCaptures.siteId} = ${claim.siteId}
-          AND ${
-            expectedReviewRevision === undefined
-              ? sql`${bottleCaptures.status} = 'importing' AND ${bottleCaptures.reviewCandidateJson} IS NULL`
-              : sql`${bottleCaptures.status} = 'needs_review' AND ${bottleCaptures.reviewRevision} = ${expectedReviewRevision}`
-          }
+          AND ${sql`${bottleCaptures.status} = 'needs_review' AND ${bottleCaptures.reviewRevision} = ${expectedReviewRevision}`}
           AND ${bottleCaptures.workflowInstanceId} IS ${claim.workflowInstanceId}
           AND ${latestCaptureRunId(claim.captureId)} = ${claim.runId}
           AND (${bottleCaptures.storageLocationId} IS NULL OR EXISTS (
@@ -365,9 +251,9 @@ function captureImportGuardStatement({
               AND (${bottles.siteId} <> ${claim.siteId}
                 OR ${bottles.wineVintageId} <> ${targetWineVintageId})))`,
       status: "importing",
-      extractorVersion: "bottle-ocr-v1",
-      promptVersion: "capture-v1",
-      schemaVersion: "wine-vintage-v1",
+      extractorVersion: "manual-review",
+      promptVersion: "manual-review",
+      schemaVersion: "wine-vintage-v2",
     })
     .onConflictDoNothing({ target: bottleCaptureRuns.id });
 }
@@ -421,7 +307,7 @@ function importCompletionStatements({
 }: {
   readonly captureId: string;
   readonly database: BoozeDatabase;
-  readonly result: Extract<BottleImportResult, { readonly kind: "imported" }>;
+  readonly result: BottleImportResult;
   readonly runId: string;
 }) {
   return [
@@ -456,7 +342,7 @@ export async function getCommittedCaptureImport({
   readonly captureId: string;
   readonly database: BoozeDatabase;
   readonly runId: string;
-}): Promise<Extract<BottleImportResult, { readonly kind: "imported" }> | null> {
+}): Promise<BottleImportResult | null> {
   const [run] = await database
     .select({ result: bottleCaptureRuns.importResultJson })
     .from(bottleCaptureRuns)
@@ -473,7 +359,7 @@ export async function getCommittedCaptureImport({
   }
   // This receipt is written atomically with the bottles by importCompletionStatements.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Reads the internal persisted import result.
-  return JSON.parse(run.result) as Extract<BottleImportResult, { readonly kind: "imported" }>;
+  return JSON.parse(run.result) as BottleImportResult;
 }
 
 function candidateValidationReasons(
@@ -505,133 +391,6 @@ function validatedImportInput(input: CaptureImportInput): CaptureImportInput {
   };
 }
 
-function invalidCandidateMatch(): BottleMatchResult {
-  return {
-    kind: "needs_review",
-    reason: "invalid_candidate",
-    wineryCandidates: [],
-    wineVintageCandidates: [],
-  };
-}
-
-export async function matchBottleCandidate({
-  candidate: inputCandidate,
-  database,
-  siteId,
-}: {
-  readonly candidate: ImportCandidate;
-  readonly database: BoozeDatabase;
-  readonly siteId: string;
-}): Promise<BottleMatchResult> {
-  if (candidateValidationReasons(inputCandidate).length > 0) return invalidCandidateMatch();
-  const candidate = { ...inputCandidate, ...catalogueCandidateSchema.parse(inputCandidate) };
-  if (
-    !hasWineIdentity(candidate.wine) ||
-    normalize(candidate.wine.wineryName || candidate.wine.brandName) === ""
-  ) {
-    return {
-      kind: "needs_review",
-      reason: "missing_required_candidate",
-      wineryCandidates: [],
-      wineVintageCandidates: [],
-    };
-  }
-
-  const wineryRows = await database
-    .select({ id: wineries.id, name: wineries.name, region: wineries.region })
-    .from(wineries)
-    .where(eq(wineries.siteId, siteId));
-  const wineryCandidates = wineryRows
-    .filter(
-      (winery) =>
-        normalize(winery.name) === normalize(candidate.wine.wineryName || candidate.wine.brandName),
-    )
-    .map((winery) => ({
-      id: winery.id,
-      label: winery.region === null ? winery.name : `${winery.name} (${winery.region})`,
-    }));
-  const wineVintageCandidates = await findWineVintageCandidates({ candidate, database, siteId });
-  if (wineryCandidates.length > 1) {
-    return {
-      kind: "needs_review",
-      reason: "ambiguous_winery",
-      wineryCandidates,
-      wineVintageCandidates,
-    };
-  }
-  if (wineVintageCandidates.length > 1) {
-    return {
-      kind: "needs_review",
-      reason: "ambiguous_wine_vintage",
-      wineryCandidates,
-      wineVintageCandidates,
-    };
-  }
-  const wineVintageCandidate = wineVintageCandidates[0];
-  if (wineVintageCandidate !== undefined) {
-    return {
-      kind: "needs_review",
-      reason: "possible_existing_wine",
-      wineryCandidates,
-      wineVintageCandidates,
-    };
-  }
-  return {
-    kind: "create_new",
-    wineryCandidates,
-    wineVintageCandidates,
-  };
-}
-
-async function findWineVintageCandidates({
-  candidate,
-  database,
-  siteId,
-}: {
-  readonly candidate: ImportCandidate;
-  readonly database: BoozeDatabase;
-  readonly siteId: string;
-}): Promise<readonly MatchCandidate[]> {
-  const vintageStatus = wineVintageStatus(candidate.wine);
-  const rows = await database
-    .select({
-      id: wineVintages.id,
-      displayName: wineVintages.displayName,
-      vintageYear: wineVintages.vintageYear,
-      vintageStatus: storedVintageStatus,
-      vintageLabel: storedVintageLabel,
-      wineryName: wineries.name,
-      brandName: wineVintages.brandName,
-    })
-    .from(wineVintages)
-    .leftJoin(wineries, and(eq(wineries.id, wineVintages.wineryId), eq(wineries.siteId, siteId)))
-    .where(eq(wineVintages.siteId, siteId));
-
-  const names = [candidate.wine.wineryName, candidate.wine.brandName]
-    .map((name) => normalize(name))
-    .filter(Boolean);
-  return (
-    rows
-      .filter((wine) =>
-        [wine.wineryName, wine.brandName].some((name) => names.includes(normalize(name))),
-      )
-      // Descriptions are incomplete evidence, not identity. Within one producer,
-      // an unknown vintage remains a possible match for any vintage. Even one
-      // plausible existing record needs an explicit human reuse decision.
-      .filter(
-        (wine) =>
-          vintageStatus === "unknown" ||
-          wine.vintageStatus === "unknown" ||
-          (vintageStatus === wine.vintageStatus &&
-            (vintageStatus !== "year" || wine.vintageYear === candidate.wine.vintageYear)),
-      )
-      .map((wine) => ({
-        id: wine.id,
-        label: `${wine.vintageLabel} ${wine.displayName}`,
-      }))
-  );
-}
-
 async function getExistingVintage({
   database,
   siteId,
@@ -658,20 +417,6 @@ async function getExistingVintage({
     });
   }
   return { ...row, statements: [] };
-}
-
-function normalize(value: string | null | undefined): string {
-  return (
-    value
-      ?.normalize("NFKD")
-      .replaceAll(/\p{M}+/gu, "")
-      .toLowerCase()
-      .replaceAll("&", "and")
-      .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
-      .replaceAll(/\b(wines?|winery|estate|vineyards?)\b/gu, "")
-      .replaceAll(/\s+/gu, " ")
-      .trim() ?? ""
-  );
 }
 
 export function databaseFromD1(database: D1Database): BoozeDatabase {
