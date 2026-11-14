@@ -1,3 +1,4 @@
+import type { BottleInput, WinePatchInput } from "../shared/catalogue-inputs.ts";
 import type {
   BottleResource,
   SiteResource,
@@ -59,6 +60,7 @@ export type FormState = {
   wineColor: string;
   alcoholPercent: string;
   bottleVolumeMl: string;
+  bottleNumber: string;
   addressQualification: string;
   barcode: string;
   lotCode: string;
@@ -93,41 +95,8 @@ export type BottlePatch = {
   readonly status?: "in_stock" | "consumed";
   readonly storageLocationId?: string | null | undefined;
   readonly positionHint?: string | undefined;
-  readonly bottle?:
-    | {
-        readonly volumeMl?: number | undefined;
-        readonly barcode?: string;
-        readonly lotCode?: string;
-        readonly notes?: string;
-      }
-    | undefined;
-  readonly wine?:
-    | {
-        readonly wineryName?: string | undefined;
-        readonly brandName?: string | undefined;
-        readonly baseName?: string | undefined;
-        readonly designation?: string | undefined;
-        readonly displayName?: string | undefined;
-        readonly vintageYear?: number | null | undefined;
-        readonly vintageStatus?: VintageStatus | undefined;
-        readonly grapeVarieties?: readonly string[] | undefined;
-        readonly country?: string | undefined;
-        readonly region?: string | undefined;
-        readonly appellation?: string | undefined;
-        readonly classification?: string | undefined;
-        readonly wineType?: string | undefined;
-        readonly wineColor?: string | undefined;
-        readonly addressQualification?: string | undefined;
-        readonly alcoholPercent?: number | null | undefined;
-        readonly drinkFromYear?: number | null | undefined;
-        readonly drinkToYear?: number | null | undefined;
-        readonly description?: string | undefined;
-        readonly drinkingAdvice?: string | undefined;
-        readonly labelText?: string | undefined;
-        readonly sourceUrl?: string | undefined;
-        readonly notes?: string | undefined;
-      }
-    | undefined;
+  readonly bottle?: BottleInput | undefined;
+  readonly wine?: WinePatchInput | undefined;
   readonly labelExtraction?:
     | {
         readonly extractedFieldsJson: string;
@@ -184,6 +153,7 @@ export const initialFormState: FormState = {
   wineColor: "",
   alcoholPercent: "",
   bottleVolumeMl: "",
+  bottleNumber: "",
   addressQualification: "",
   barcode: "",
   lotCode: "",
@@ -401,6 +371,7 @@ export function formStateForItem(item: InventoryItem): FormState {
     wineColor: formText(item.wineColor),
     alcoholPercent: formYear(item.alcoholPercent),
     bottleVolumeMl: String(item.volumeMl),
+    bottleNumber: formText(item.bottleNumber),
     addressQualification: formText(item.addressQualification),
     barcode: formText(item.barcode),
     lotCode: formText(item.lotCode),

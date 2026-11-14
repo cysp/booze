@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { Hono } from "hono";
-import { bottleEditPayload } from "../src/bottle-payload.ts";
+import { bottleEditPayload, bottleFormSubmission } from "../src/bottle-payload.ts";
 import { formStateForItem } from "../src/inventory-model.ts";
 import { inventoryItemFixture } from "../src/test/catalogue-fixtures.ts";
 import { problemResponseForError } from "./api/http.ts";
@@ -160,19 +160,14 @@ await it("preserves accepted OCR text through later separate-wine and shared cor
     const form = formStateForItem(item);
     form.vintageStatus = "year";
     form.vintageYear = "2024";
-    const clone = await request(
-      "PATCH",
-      "/bottles/one",
-      bottleEditPayload(
-        {
-          form,
-          wineEditScope: "bottle",
-          awards: [],
-          criticReviews: [],
-        },
-        item,
-      ),
+    const submission = bottleFormSubmission(
+      { kind: "reassign", item },
+      form,
+      { awards: [], criticReviews: [] },
+      "",
     );
+    assert.ok(submission.kind !== "add");
+    const clone = await request("PATCH", "/bottles/one", bottleEditPayload(submission, item));
     assert.equal(clone.status, 200, await clone.text());
     assert.deepEqual(
       {

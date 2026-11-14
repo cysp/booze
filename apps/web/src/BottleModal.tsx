@@ -1,33 +1,20 @@
-import { WineRecordPicker } from "./WineRecordPicker.tsx";
-import type { AuthHeadersProvider } from "./useReadPage.ts";
-import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
-/* oxlint-disable import/max-dependencies -- Bottle editing composes ASTRYX fields, dialogs, and domain adapters. */
-import { Button } from "@astryxdesign/core/Button";
-import { Selector } from "@astryxdesign/core/Selector";
+/* oxlint-disable import/max-dependencies -- One immutable bottle action owns its fields, evidence, and draft lifecycle. */
 import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type SubmitEvent,
-  type ReactElement,
-  type ReactNode,
-} from "react";
-import { useForm, type Control, type UseFormSetValue, type UseFormWatch } from "react-hook-form";
-
+import { useEffect, useRef, useState, type ReactElement, type SubmitEvent } from "react";
+import { useForm } from "react-hook-form";
 import { formatWineLabel, hasWineIdentity } from "../shared/wine-identity.ts";
-import { GrapeVarietiesInput } from "./GrapeVarietiesInput.tsx";
-import { parseOptionalYear } from "./inventory-model.ts";
-import { BottleLocationPicker } from "./BottleLocationPicker.tsx";
+import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
+import {
+  BottleFactFields,
+  BottleStorageFields,
+  WineIdentityFields,
+  WineReferenceFields,
+} from "./BottleActionFields.tsx";
 import { AwardFields, CriticReviewFields } from "./BottleMetadataFields.tsx";
 import { DestructiveActionDialog } from "./DestructiveActionDialog.tsx";
-import {
-  BottleQuantityInput,
-  BottleTextArea,
-  BottleTextInput,
-  type BottleFormFieldProps,
-} from "./BottleFormFields.tsx";
+import { WineRecordPicker } from "./WineRecordPicker.tsx";
 import {
   awardInputsForItem,
   criticReviewInputsForItem,
@@ -37,431 +24,134 @@ import {
   type AwardErrors,
   type ReviewErrors,
 } from "./bottle-metadata.ts";
-import type {
-  CriticReviewInput,
-  FormState,
-  InventoryItem,
-  LocationItem,
-  SiteItem,
-  WineAwardInput,
+import {
+  bottleFormSubmission,
+  type BottleFormAction,
+  type BottleModalSubmit,
+  type BottleModalSubmitResult,
+} from "./bottle-payload.ts";
+import {
+  formStateForItem,
+  initialFormState,
+  parseOptionalYear,
+  type CriticReviewInput,
+  type FormState,
+  type LocationItem,
+  type SiteItem,
 } from "./inventory-model.ts";
+import type { AuthHeadersProvider } from "./useReadPage.ts";
+
+export type { BottleModalSubmit, BottleModalSubmitResult } from "./bottle-payload.ts";
 
 type BottleModalProps = {
-  readonly form: FormState;
+  readonly action: BottleFormAction;
   readonly isSaving: boolean;
-  readonly item?: InventoryItem;
-  readonly wines?: readonly WineOption[];
-  readonly getAuthHeaders?: AuthHeadersProvider;
+  readonly getAuthHeaders: AuthHeadersProvider;
   readonly locations: readonly LocationItem[];
   readonly sites: readonly SiteItem[];
-  readonly title: string;
   readonly onClose: (siteId: string) => void;
-  readonly onDelete?: () => Promise<boolean>;
-  readonly onMarkConsumed?: () => Promise<boolean>;
   readonly onSubmit: (input: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
 };
 
-export type BottleModalSubmit = {
-  readonly wineEditScope?: "shared" | "bottle" | undefined;
-  readonly wineVintageId?: string | undefined;
-  readonly allowUnidentified?: boolean | undefined;
-  readonly awards: readonly WineAwardInput[];
-  readonly criticReviews: readonly CriticReviewInput[];
-  readonly form: FormState;
-};
+export function bottleActionTitle(kind: BottleFormAction["kind"]): string {
+  switch (kind) {
+    case "add":
+      return "Add bottle";
+    case "move":
+      return "Move bottle";
+    case "edit-bottle":
+      return "Edit bottle facts";
+    case "correct-wine":
+      return "Correct shared wine";
+    case "reassign":
+      return "Reassign this bottle";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
 
-export type BottleModalSubmitResult =
-  | { readonly ok: true }
-  | { readonly message: string; readonly ok: false };
+function saveLabel(kind: BottleFormAction["kind"], unidentified: boolean): string {
+  if (unidentified) return "Save as unidentified wine";
+  switch (kind) {
+    case "add":
+      return "Save bottle";
+    case "move":
+      return "Move bottle";
+    case "edit-bottle":
+      return "Save bottle facts";
+    case "correct-wine":
+      return "Save wine corrections";
+    case "reassign":
+      return "Reassign bottle";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
 
-type FormFieldConfig = Omit<BottleFormFieldProps, "control">;
+function actionDefaults(action: BottleFormAction): FormState {
+  if (action.kind === "add") return action.form;
+  if (action.kind === "reassign")
+    return { ...initialFormState, siteId: action.item.siteId, site: action.item.siteName };
+  return formStateForItem(action.item);
+}
 
-const identityFields = [
-  { label: "Label / brand", name: "brandName", placeholder: "Rowlee" },
-  { label: "Winery", name: "wineryName", placeholder: "Rowlee Wines" },
-  {
-    label: "Designation (optional)",
-    name: "designation",
-    placeholder: "Pinnacle Series",
-    description:
-      "A separate name, range, vineyard or designation printed on the label, if present.",
-  },
-] satisfies readonly FormFieldConfig[];
-
-const originFields = [
-  { label: "Region", name: "region", placeholder: "Orange" },
-  { label: "Country", name: "country", placeholder: "Australia" },
-  { label: "Appellation", name: "appellation", placeholder: "Orange GI" },
-  { label: "Classification", name: "classification", placeholder: "Grand Cru" },
-  { label: "Style", name: "wineType", placeholder: "Red wine" },
-  { label: "Colour", name: "wineColor", placeholder: "Red" },
-  { label: "Alcohol", name: "alcoholPercent", placeholder: "13.5% alc/vol" },
-] satisfies readonly FormFieldConfig[];
-
-const referenceFields = [
-  {
-    label: "Description",
-    name: "description",
-    placeholder: "Visible winery description or tasting copy",
-  },
-  {
-    label: "Drinking advice",
-    name: "drinkingAdvice",
-    placeholder: "Cellaring or serving advice",
-  },
-  { label: "Label text", name: "labelText", placeholder: "Paste label, OCR, or winery page text" },
-  {
-    label: "Wine notes",
-    name: "wineNotes",
-    placeholder: "Tasting notes, food pairing, source details",
-  },
-] satisfies readonly FormFieldConfig[];
+function fieldsForAction(kind: BottleFormAction["kind"]) {
+  return {
+    wine: ["add", "correct-wine", "reassign"].includes(kind),
+    storage: ["add", "move"].includes(kind),
+    bottle: ["add", "edit-bottle"].includes(kind),
+    picker: ["add", "reassign"].includes(kind),
+    editsStoredFacts: ["correct-wine", "edit-bottle"].includes(kind),
+  };
+}
 
 export function BottleModal({
-  form,
+  action,
   isSaving,
-  item,
-  wines,
   getAuthHeaders,
   locations,
   sites,
-  title,
   onClose,
-  onDelete,
-  onMarkConsumed,
   onSubmit,
 }: BottleModalProps): ReactElement {
-  const [wineEditMode, setWineEditMode] = useState<"none" | "shared" | "bottle">("none");
-  const [wineVintageId, setWineVintageId] = useState("");
-  const [criticReviews, setCriticReviews] = useState<readonly CriticReviewInput[]>(
-    criticReviewInputsForItem(item),
-  );
-  const [awards, setAwards] = useState<readonly AwardDraft[]>(awardInputsForItem(item));
-  const [newWineReviews, setNewWineReviews] = useState<readonly CriticReviewInput[]>([]);
-  const [newWineAwards, setNewWineAwards] = useState<readonly AwardDraft[]>([]);
-  const { activeReviews, activeAwards, changeReviews, changeAwards } = evidenceForMode(
-    wineEditMode,
-    {
-      activeReviews: criticReviews,
-      activeAwards: awards,
-      changeReviews: setCriticReviews,
-      changeAwards: setAwards,
-    },
-    {
-      activeReviews: newWineReviews,
-      activeAwards: newWineAwards,
-      changeReviews: setNewWineReviews,
-      changeAwards: setNewWineAwards,
-    },
-  );
+  // A fixed action is a draft's lifetime; callers mount a new key to choose another action.
+  const [draftAction] = useState(action);
+  const fields = fieldsForAction(draftAction.kind);
+  const [defaults] = useState(() => actionDefaults(draftAction));
+  const sharedItem = draftAction.kind === "correct-wine" ? draftAction.item : undefined;
+  const [originalReviews] = useState(() => criticReviewInputsForItem(sharedItem));
+  const [originalAwards] = useState(() => awardInputsForItem(sharedItem));
+  const [criticReviews, setCriticReviews] = useState<readonly CriticReviewInput[]>(originalReviews);
+  const [awards, setAwards] = useState<readonly AwardDraft[]>(originalAwards);
+  const [wineSelection, setWineSelection] = useState<{
+    readonly id: string;
+    readonly option: WineOption | undefined;
+  }>({ id: "", option: undefined });
   const [reviewErrors, setReviewErrors] = useState<readonly ReviewErrors[]>([]);
   const [awardErrors, setAwardErrors] = useState<readonly AwardErrors[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
   const [isDiscardOpen, setIsDiscardOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"save" | "consume" | "delete" | null>(null);
-  const pendingActionRef = useRef<typeof pendingAction>(null);
-  const originalReviews = useRef(JSON.stringify(criticReviews));
-  const originalAwards = useRef(JSON.stringify(awards));
-  const [consumeError, setConsumeError] = useState<string | null>(null);
+  const [isPending, setIsPending] = useState(false);
+  const pendingRef = useRef(false);
+  const advancedRef = useRef<HTMLDetailsElement>(null);
   const {
     control,
     handleSubmit,
     setValue,
     watch,
     formState: { isDirty },
-  } = useForm<FormState>({ defaultValues: form });
-
-  const isBusy = isSaving || pendingAction !== null;
-  const hasUnsavedChanges =
-    isDirty ||
-    hasWineEditIntent(wineEditMode, wineVintageId, newWineReviews.length + newWineAwards.length) ||
-    repeatablesChanged(criticReviews, originalReviews.current, awards, originalAwards.current);
-
-  const currentValues = watch();
-  const wineEditable = canEditWine(item, wineEditMode, wineVintageId);
-  const needsIdentityConfirmation = needsWineIdentityConfirmation(wineEditable, currentValues);
-
-  useEffect(() => {
-    function warnBeforeUnload(event: BeforeUnloadEvent): void {
-      event.preventDefault();
-    }
-    if (hasUnsavedChanges) {
-      window.addEventListener("beforeunload", warnBeforeUnload);
-    }
-    return () => {
-      window.removeEventListener("beforeunload", warnBeforeUnload);
-    };
-  }, [hasUnsavedChanges]);
-
-  function beginAction(action: NonNullable<typeof pendingAction>): boolean {
-    if (pendingActionRef.current !== null || isSaving) {
-      return false;
-    }
-    pendingActionRef.current = action;
-    setPendingAction(action);
-    return true;
-  }
-
-  function finishAction(): void {
-    pendingActionRef.current = null;
-    setPendingAction(null);
-  }
-
-  const submitForm = handleSubmit(async (values) => {
-    setSubmitError(null);
-    const reviewsResult = validateCriticReviews(wineEditable ? activeReviews : []);
-    const awardsResult = validateAwards(wineEditable ? activeAwards : []);
-    setReviewErrors(reviewsResult.errors);
-    setAwardErrors(awardsResult.errors);
-    if (!reviewsResult.ok || !awardsResult.ok) {
-      requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>("[data-repeatable-error='true']")?.focus();
-      });
-      return;
-    }
-    const result = await onSubmit({
-      wineEditScope: item === undefined || wineEditMode === "none" ? undefined : wineEditMode,
-      wineVintageId: wineVintageId === "" ? undefined : wineVintageId,
-      allowUnidentified: needsIdentityConfirmation,
-      awards: awardsResult.values,
-      criticReviews: reviewsResult.values,
-      form: values,
-    });
-    if (!result.ok) {
-      setSubmitError(result.message);
-    }
-  });
-
-  async function saveForm(event: SubmitEvent<HTMLFormElement>): Promise<void> {
-    if (isDeleteOpen || isDiscardOpen || !beginAction("save")) {
-      return;
-    }
-    try {
-      await submitForm(event);
-    } catch {
-      setSubmitError("Bottle was not saved. Check your connection and try again.");
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function markConsumed(): Promise<void> {
-    if (onMarkConsumed === undefined || hasUnsavedChanges || !beginAction("consume")) {
-      return;
-    }
-    setConsumeError(null);
-    try {
-      const updated = await onMarkConsumed();
-      if (!updated) {
-        setConsumeError("Bottle was not marked drunk. Try again.");
-      }
-    } catch {
-      setConsumeError("Bottle was not marked drunk. Try again.");
-    } finally {
-      finishAction();
-    }
-  }
-
-  function changeOpen(isOpen: boolean): void {
-    if (isOpen || pendingActionRef.current !== null || isSaving || isDeleteOpen || isDiscardOpen) {
-      return;
-    }
-    if (hasUnsavedChanges) {
-      setIsDiscardOpen(true);
-    } else {
-      onClose(currentValues.siteId);
-    }
-  }
-
-  return (
-    <>
-      <Dialog
-        aria-label={title}
-        isOpen
-        maxHeight="calc(100dvh - 32px)"
-        purpose="form"
-        width="min(920px, calc(100vw - 32px))"
-        onOpenChange={changeOpen}
-      >
-        <DialogHeader
-          subtitle={
-            item === undefined
-              ? "Review the cellar record before saving."
-              : "Storage and bottle notes apply to this bottle. Choose explicitly whether to correct shared wine details or identify this bottle as a different wine."
-          }
-          title={title}
-          onOpenChange={changeOpen}
-        />
-        <form
-          className="form-stack"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void saveForm(event);
-          }}
-        >
-          <fieldset className="form-stack bottle-form-fields" disabled={isBusy}>
-            <WineEditControls
-              item={item}
-              wines={wines}
-              getAuthHeaders={getAuthHeaders}
-              values={currentValues}
-              wineEditMode={wineEditMode}
-              wineVintageId={wineVintageId}
-              setWineEditMode={(mode) => {
-                setWineEditMode(mode);
-                setReviewErrors([]);
-                setAwardErrors([]);
-              }}
-              setWineVintageId={setWineVintageId}
-            />
-            <BottleFields
-              wineEditable={wineEditable}
-              hideWineDetails={wineVintageId !== ""}
-              onSiteChange={() => {
-                setWineVintageId("");
-              }}
-              control={control}
-              disableSiteSelection={item !== undefined}
-              locations={locations}
-              setValue={setValue}
-              showQuantity={item === undefined}
-              sites={sites}
-              watch={watch}
-            />
-            <div hidden={wineVintageId !== ""}>
-              <fieldset className="form-stack bottle-form-fields" disabled={!wineEditable}>
-                <NewWineEvidenceHint mode={wineEditMode} />
-                <CriticReviewFields
-                  errors={reviewErrors}
-                  reviews={activeReviews}
-                  onChange={(next) => {
-                    changeReviews(next);
-                    setReviewErrors([]);
-                  }}
-                />
-                <AwardFields
-                  awards={activeAwards}
-                  errors={awardErrors}
-                  onChange={(next) => {
-                    changeAwards(next);
-                    setAwardErrors([]);
-                  }}
-                />
-              </fieldset>
-            </div>
-          </fieldset>
-          <div className="dialog-actions">
-            <Button
-              isDisabled={isBusy || isDeleteOpen || isDiscardOpen}
-              isLoading={isSaving || pendingAction === "save"}
-              label={bottleSaveLabel(needsIdentityConfirmation)}
-              type="submit"
-              variant="primary"
-            />
-            {onMarkConsumed === undefined ? null : (
-              <Button
-                isDisabled={isBusy || hasUnsavedChanges || isDeleteOpen || isDiscardOpen}
-                isLoading={pendingAction === "consume"}
-                label="Mark drunk"
-                onClick={() => {
-                  void markConsumed();
-                }}
-              />
-            )}
-            {onDelete === undefined ? null : (
-              <Button
-                ref={deleteTriggerRef}
-                isDisabled={isBusy || isDiscardOpen}
-                label="Delete bottle"
-                variant="destructive"
-                onClick={() => {
-                  setIsDeleteOpen(true);
-                }}
-              />
-            )}
-            {onMarkConsumed !== undefined && hasUnsavedChanges ? (
-              <p className="field-hint">Save your changes before marking this bottle drunk.</p>
-            ) : null}
-            {consumeError === null ? null : (
-              <Banner role="alert" status="error" title={consumeError} />
-            )}
-            {submitError === null ? null : (
-              <Banner role="alert" status="error" title={submitError} />
-            )}
-          </div>
-        </form>
-      </Dialog>
-      <DestructiveActionDialog
-        actionLabel="Discard changes"
-        description="Your unsaved changes will be discarded. The stored bottle record will stay as it is."
-        failureMessage="The editor could not be closed. Try again."
-        isOpen={isDiscardOpen}
-        title="Discard unsaved changes?"
-        onAction={async () => true}
-        onOpenChange={setIsDiscardOpen}
-        onSuccess={() => {
-          onClose(currentValues.siteId);
-        }}
-      />
-      {onDelete === undefined ? null : (
-        <DestructiveActionDialog
-          actionLabel="Delete bottle"
-          description="This permanently removes this bottle and its inventory record. This action cannot be undone."
-          failureMessage="Bottle was not deleted. Try again."
-          isOpen={isDeleteOpen}
-          returnFocusRef={deleteTriggerRef}
-          title="Delete this bottle?"
-          onAction={async () => {
-            if (!beginAction("delete")) {
-              return false;
-            }
-            try {
-              return await onDelete();
-            } finally {
-              finishAction();
-            }
-          }}
-          onOpenChange={setIsDeleteOpen}
-          onSuccess={() => {
-            onClose(currentValues.siteId);
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-type WineEditMode = "none" | "shared" | "bottle";
-
-function repeatablesChanged(
-  reviews: readonly CriticReviewInput[],
-  originalReviews: string,
-  awards: readonly AwardDraft[],
-  originalAwards: string,
-): boolean {
-  return JSON.stringify(reviews) !== originalReviews || JSON.stringify(awards) !== originalAwards;
-}
-
-function bottleSaveLabel(unidentified: boolean): string {
-  return unidentified ? "Save as unidentified wine" : "Save bottle";
-}
-
-function needsWineIdentityConfirmation(editable: boolean, values: FormState): boolean {
-  return editable && !hasWineIdentity(wineFactsForForm(values));
-}
-
-function hasWineEditIntent(mode: WineEditMode, target: string, newEvidenceCount: number): boolean {
-  return mode === "bottle" || target !== "" || newEvidenceCount > 0;
-}
-
-function canEditWine(item: InventoryItem | undefined, mode: WineEditMode, target: string): boolean {
-  return (item === undefined || mode !== "none") && target === "";
-}
-
-function wineFactsForForm(values: FormState) {
-  return {
+  } = useForm<FormState>({ defaultValues: defaults });
+  const values = watch();
+  const isBusy = isSaving || isPending;
+  const reviewsChanged = JSON.stringify(criticReviews) !== JSON.stringify(originalReviews);
+  const awardsChanged = JSON.stringify(awards) !== JSON.stringify(originalAwards);
+  const hasUnsavedChanges = isDirty || wineSelection.id !== "" || reviewsChanged || awardsChanged;
+  const wineEditable = fields.wine && wineSelection.id === "";
+  const wineFacts = {
     wineryName: values.wineryName,
     brandName: values.brandName,
     designation: values.designation,
@@ -470,351 +160,221 @@ function wineFactsForForm(values: FormState) {
     vintageYear: parseOptionalYear(values.vintageYear),
     vintageStatus: values.vintageStatus,
   };
-}
+  const unidentified = wineEditable && !hasWineIdentity(wineFacts);
+  const originalForm = fields.editsStoredFacts ? defaults : undefined;
 
-function evidenceForMode<T>(mode: WineEditMode, shared: T, separate: T): T {
-  return mode === "bottle" ? separate : shared;
-}
+  useEffect(() => {
+    function warnBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault();
+    }
+    if (hasUnsavedChanges) window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+    };
+  }, [hasUnsavedChanges]);
 
-function NewWineEvidenceHint({ mode }: { readonly mode: WineEditMode }): ReactElement | null {
-  return mode === "bottle" ? (
-    <p>
-      Reviews and awards below belong to the new wine. The original wine's evidence stays with its
-      original record.
-    </p>
-  ) : null;
-}
+  function revealErrors(): void {
+    if (advancedRef.current !== null) advancedRef.current.open = true;
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>("[data-repeatable-error='true'], [aria-invalid='true']")
+        ?.focus();
+    });
+  }
 
-function SelectedWineSummary({
-  item,
-}: {
-  readonly item: WineOption | undefined;
-}): ReactElement | null {
-  if (item === undefined) return null;
-  return (
-    <section aria-label="Selected wine details">
-      <h3>{wineOptionLabel(item)}</h3>
-      <p>
-        {[item.wineryName, item.grapeVarieties.join(", "), item.region]
-          .filter(Boolean)
-          .join(" · ") || "Unidentified wine"}
-      </p>
-      <p>Existing wine details will be used for this bottle.</p>
-    </section>
-  );
-}
+  const submit = handleSubmit(async (current) => {
+    const validateReviews = wineEditable && (draftAction.kind !== "correct-wine" || reviewsChanged);
+    const validateAwardRows =
+      wineEditable && (draftAction.kind !== "correct-wine" || awardsChanged);
+    const reviewsResult = validateCriticReviews(validateReviews ? criticReviews : []);
+    const awardsResult = validateAwards(validateAwardRows ? awards : []);
+    setReviewErrors(reviewsResult.errors);
+    setAwardErrors(awardsResult.errors);
+    if (!reviewsResult.ok || !awardsResult.ok) {
+      revealErrors();
+      return;
+    }
+    const evidence = {
+      allowUnidentified: unidentified,
+      ...(validateReviews ? { criticReviews: reviewsResult.values } : {}),
+      ...(validateAwardRows ? { awards: awardsResult.values } : {}),
+    };
+    const result = await onSubmit(
+      bottleFormSubmission(draftAction, current, evidence, wineSelection.id),
+    );
+    if (result.ok) onClose(current.siteId);
+    else setSubmitError(result.message);
+  }, revealErrors);
 
-function WineEditControls({
-  item,
-  wines,
-  getAuthHeaders,
-  values,
-  wineEditMode,
-  wineVintageId,
-  setWineEditMode,
-  setWineVintageId,
-}: {
-  readonly item: InventoryItem | undefined;
-  readonly wines: readonly WineOption[] | undefined;
-  readonly getAuthHeaders: AuthHeadersProvider | undefined;
-  readonly values: FormState;
-  readonly wineEditMode: WineEditMode;
-  readonly wineVintageId: string;
-  readonly setWineEditMode: (mode: WineEditMode) => void;
-  readonly setWineVintageId: (id: string) => void;
-}): ReactElement {
-  const wineFacts = wineFactsForForm(values);
-  const wineEditable = canEditWine(item, wineEditMode, wineVintageId);
-  const needsIdentityConfirmation = wineEditable && !hasWineIdentity(wineFacts);
-  const [selectedWine, setSelectedWine] = useState<WineOption | undefined>();
-  const selectableWines = [
-    ...new Map(
-      (wines ?? [])
-        .filter(
-          (candidate) =>
-            candidate.siteId === values.siteId && candidate.wineVintageId !== item?.wineVintageId,
-        )
-        .map((candidate) => [candidate.wineVintageId, candidate]),
-    ).values(),
-  ];
-  return (
-    <>
-      {item === undefined ? null : (
-        <Selector
-          label="What are you editing?"
-          value={wineEditMode}
-          options={[
-            { value: "none", label: "Bottle details only" },
-            { value: "shared", label: "Correct wine details" },
-            { value: "bottle", label: "This bottle is a different wine" },
-          ]}
-          onChange={(value: string) => {
-            if (value === "none" || value === "shared" || value === "bottle") {
-              setWineEditMode(value);
-              setWineVintageId("");
-            }
-          }}
-        />
-      )}
-      {item !== undefined && wineEditMode === "shared" ? (
-        <Banner
-          status="warning"
-          title={`Corrections will update all ${item.wineBottleCount} linked ${item.wineBottleCount === 1 ? "bottle" : "bottles"}.`}
-        />
-      ) : null}
-      {item === undefined || wineEditMode === "bottle" ? (
-        <WineRecordPicker
-          siteId={values.siteId}
-          selected={wineVintageId}
-          wines={wines}
-          getAuthHeaders={getAuthHeaders}
-          excludedId={item?.wineVintageId}
-          label="Wine record"
-          allowNew
-          onChange={(id, option) => {
-            setWineVintageId(id);
-            setSelectedWine(option);
-          }}
-        />
-      ) : null}
-      <SelectedWineSummary
-        item={
-          selectedWine ??
-          selectableWines.find((candidate) => candidate.wineVintageId === wineVintageId)
-        }
-      />
-      {wineEditable ? <p>Catalogue title: {formatWineLabel(wineFacts)}</p> : null}
-      {needsIdentityConfirmation ? (
-        <p>
-          Wine details are incomplete. Choose “Save as unidentified wine” to save now and complete
-          them later.
-        </p>
-      ) : null}
-    </>
-  );
-}
+  async function save(event: SubmitEvent<HTMLFormElement>): Promise<void> {
+    if (pendingRef.current || isSaving || isDiscardOpen) return;
+    pendingRef.current = true;
+    setIsPending(true);
+    setSubmitError(null);
+    try {
+      await submit(event);
+    } catch {
+      setSubmitError(
+        "The change could not be confirmed. Your details are still here; check your connection and try again.",
+      );
+    } finally {
+      pendingRef.current = false;
+      setIsPending(false);
+    }
+  }
 
-function BottleFields({
-  hideWineDetails,
-  onSiteChange,
-  wineEditable,
-  control,
-  disableSiteSelection,
-  locations,
-  setValue,
-  showQuantity,
-  sites,
-  watch,
-}: {
-  readonly control: Control<FormState>;
-  readonly wineEditable: boolean;
-  readonly hideWineDetails: boolean;
-  readonly onSiteChange: () => void;
-  readonly disableSiteSelection: boolean;
-  readonly locations: readonly LocationItem[];
-  readonly setValue: UseFormSetValue<FormState>;
-  readonly showQuantity: boolean;
-  readonly sites: readonly SiteItem[];
-  readonly watch: UseFormWatch<FormState>;
-}): ReactElement {
-  const vintageStatus = watch("vintageStatus");
-  const selectedSiteId = watch("siteId");
-  const selectedStorageLocationId = watch("storageLocationId");
+  function changeOpen(open: boolean): void {
+    if (open || pendingRef.current || isSaving || isDiscardOpen) return;
+    if (hasUnsavedChanges) setIsDiscardOpen(true);
+    else onClose(values.siteId);
+  }
+
   return (
     <>
-      <div hidden={hideWineDetails}>
-        <fieldset className="form-stack bottle-form-fields" disabled={!wineEditable}>
-          <FormSection title="Wine identity">
-            <FieldGrid control={control} fields={identityFields} disabled={!wineEditable} />
-            <GrapeVarietiesInput
-              disabled={!wineEditable}
-              name="grapeVarieties"
-              value={watch("grapeVarieties")}
-              onChange={(value) => {
-                setValue("grapeVarieties", value, { shouldDirty: true, shouldTouch: true });
-              }}
-            />
-            <Selector
-              label="Vintage status"
-              value={vintageStatus}
-              options={[
-                { value: "unknown", label: "Unknown vintage" },
-                { value: "year", label: "Vintage year" },
-                { value: "non_vintage", label: "Explicitly non-vintage (NV)" },
-              ]}
-              onChange={(value: string) => {
-                if (value === "year" || value === "unknown" || value === "non_vintage") {
-                  setValue("vintageStatus", value, { shouldDirty: true });
-                  if (value !== "year") setValue("vintageYear", "", { shouldDirty: true });
-                }
-              }}
-            />
-            {vintageStatus === "year" ? (
-              <BottleTextInput
+      <Dialog
+        aria-label={bottleActionTitle(draftAction.kind)}
+        isOpen
+        maxHeight="calc(100dvh - 32px)"
+        purpose="form"
+        width="min(920px, calc(100vw - 32px))"
+        onOpenChange={changeOpen}
+      >
+        <DialogHeader title={bottleActionTitle(draftAction.kind)} onOpenChange={changeOpen} />
+        <form
+          className="form-stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(event);
+          }}
+        >
+          <fieldset className="form-stack bottle-form-fields" disabled={isBusy || isDiscardOpen}>
+            <ActionExplanation action={draftAction} />
+            {fields.storage ? (
+              <BottleStorageFields
                 control={control}
-                label="Vintage"
-                name="vintageYear"
-                placeholder="2023"
-                required
-                disabled={!wineEditable}
+                setValue={setValue}
+                watch={watch}
+                locations={locations}
+                sites={sites}
+                adding={draftAction.kind === "add"}
+                onSiteChange={() => {
+                  setWineSelection({ id: "", option: undefined });
+                }}
               />
             ) : null}
-          </FormSection>
-          <FormSection title="Origin and style">
-            <FieldGrid control={control} fields={originFields} disabled={!wineEditable} />
-          </FormSection>
-          <BottleTextArea
-            control={control}
-            disabled={!wineEditable}
-            label="Producer address"
-            name="addressQualification"
-            placeholder="Produced by, bottled by, or address"
-          />
-        </fieldset>
-      </div>
-      <FormSection title="Bottle and storage">
-        <FieldGrid
-          control={control}
-          fields={[
-            {
-              label: "Bottle size",
-              name: "bottleVolumeMl",
-              placeholder: "750ml",
-              required: !showQuantity,
-            },
-            { label: "Barcode", name: "barcode", placeholder: "9342675000444" },
-          ]}
-        />
-        <BottleLocationPicker
-          disabledSite={disableSiteSelection}
-          idPrefix={showQuantity ? "add-bottle-storage" : "edit-bottle-storage"}
-          locations={locations}
-          selectedSiteId={selectedSiteId}
-          selectedStorageLocationId={selectedStorageLocationId}
-          sites={sites}
-          onChange={(selection) => {
-            if (selection.siteId !== selectedSiteId) onSiteChange();
-            setValue("siteId", selection.siteId, { shouldDirty: true, shouldTouch: true });
-            setValue("site", selection.site, { shouldDirty: true, shouldTouch: true });
-            setValue("storageLocationId", selection.storageLocationId, {
-              shouldDirty: true,
-              shouldTouch: true,
-            });
-            setValue("location", selection.location, { shouldDirty: true, shouldTouch: true });
-            if (selection.storageLocationId === "") {
-              setValue("position", "", { shouldDirty: true, shouldTouch: true });
-            }
-          }}
-        />
-        <FieldGrid
-          control={control}
-          fields={
-            showQuantity
-              ? [{ label: "Lot code", name: "lotCode", placeholder: "L23051" }]
-              : [
-                  { label: "Lot code", name: "lotCode", placeholder: "L23051" },
-                  {
-                    label: "Position note",
-                    name: "position",
-                    placeholder: "Row 3, slot 2",
-                    disabled: selectedStorageLocationId === "",
-                    description:
-                      selectedStorageLocationId === ""
-                        ? "Choose a location to add a position note."
-                        : undefined,
-                  },
-                ]
-          }
-        />
-        {showQuantity ? <BottleQuantityInput control={control} /> : null}
-        <BottleTextArea
-          control={control}
-          label="Bottle notes"
-          name="bottleNotes"
-          placeholder="Condition, purchase source, box details"
-        />
-        {showQuantity ? (
-          <BottleTextInput
-            control={control}
-            label="Position note"
-            name="position"
-            placeholder="Row 3, slot 2"
-            disabled={selectedStorageLocationId === ""}
-            description={
-              selectedStorageLocationId === ""
-                ? "Choose a location to add a position note."
-                : undefined
-            }
-          />
-        ) : null}
-      </FormSection>
-      <div hidden={hideWineDetails}>
-        <fieldset className="form-stack bottle-form-fields" disabled={!wineEditable}>
-          <FormSection title="Drink window">
-            <FieldGrid
-              disabled={!wineEditable}
-              control={control}
-              fields={[
-                { label: "Drink from", name: "drinkFromYear", placeholder: "2025" },
-                { label: "Drink to", name: "drinkToYear", placeholder: "2032" },
-                {
-                  label: "Source URL",
-                  name: "sourceUrl",
-                  placeholder: "https://winery.example/wine",
-                },
-              ]}
-            />
-          </FormSection>
-          <FormSection title="Wine reference">
-            {referenceFields.map((field) => (
-              <BottleTextArea
-                control={control}
-                key={field.name}
-                disabled={!wineEditable}
-                {...field}
+            {fields.picker ? (
+              <WineRecordPicker
+                siteId={values.siteId}
+                selected={wineSelection.id}
+                getAuthHeaders={getAuthHeaders}
+                excludedId={
+                  draftAction.kind === "reassign" ? draftAction.item.wineVintageId : undefined
+                }
+                label="Wine record"
+                allowNew
+                onChange={(id, option) => {
+                  setWineSelection({ id, option });
+                }}
               />
-            ))}
-          </FormSection>
-        </fieldset>
-      </div>
+            ) : null}
+            {wineSelection.option === undefined ? null : (
+              <section aria-label="Selected wine details">
+                <h3>{wineOptionLabel(wineSelection.option)}</h3>
+                <p>Existing wine facts and evidence will be used without changing that wine.</p>
+              </section>
+            )}
+            {wineEditable ? (
+              <>
+                <WineIdentityFields
+                  control={control}
+                  originalForm={originalForm}
+                  setValue={setValue}
+                  watch={watch}
+                />
+                <p>Catalogue title: {formatWineLabel(wineFacts)}</p>
+                {unidentified ? (
+                  <p>
+                    Wine details are incomplete. Choose “Save as unidentified wine” to save now and
+                    complete them later.
+                  </p>
+                ) : null}
+                <details ref={advancedRef} className="form-section">
+                  <summary>Wine reference and evidence</summary>
+                  <p className="field-hint">
+                    Edit origin, style, drinking advice, label text, source notes, critic reviews
+                    and awards deliberately.
+                  </p>
+                  <WineReferenceFields control={control} originalForm={originalForm} />
+                  <CriticReviewFields
+                    errors={reviewErrors}
+                    reviews={criticReviews}
+                    onChange={(next) => {
+                      setCriticReviews(next);
+                      setReviewErrors([]);
+                    }}
+                  />
+                  <AwardFields
+                    errors={awardErrors}
+                    awards={awards}
+                    onChange={(next) => {
+                      setAwards(next);
+                      setAwardErrors([]);
+                    }}
+                  />
+                </details>
+              </>
+            ) : null}
+            {fields.bottle ? (
+              <BottleFactFields
+                control={control}
+                originalForm={originalForm}
+                adding={draftAction.kind === "add"}
+              />
+            ) : null}
+          </fieldset>
+          <div className="dialog-actions">
+            <Button
+              isDisabled={isBusy || isDiscardOpen}
+              isLoading={isBusy}
+              label={saveLabel(draftAction.kind, unidentified)}
+              type="submit"
+              variant="primary"
+            />
+          </div>
+          {submitError === null ? null : <Banner role="alert" status="error" title={submitError} />}
+        </form>
+      </Dialog>
+      <DestructiveActionDialog
+        actionLabel="Discard changes"
+        description="Your unsaved changes will be discarded. Stored facts and evidence will stay as they are."
+        failureMessage="The form could not be closed. Try again."
+        isOpen={isDiscardOpen}
+        title="Discard unsaved changes?"
+        onAction={async () => true}
+        onOpenChange={setIsDiscardOpen}
+        onSuccess={() => {
+          onClose(values.siteId);
+        }}
+      />
     </>
   );
 }
 
-function FormSection({
-  children,
-  title,
-}: {
-  readonly children: ReactNode;
-  readonly title: string;
-}): ReactElement {
-  return (
-    <section className="form-section">
-      <h3>{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function FieldGrid({
-  disabled = false,
-  control,
-  fields,
-}: {
-  readonly control: Control<FormState>;
-  readonly fields: readonly FormFieldConfig[];
-  readonly disabled?: boolean;
-}): ReactElement {
-  return (
-    <div className="field-row">
-      {fields.map((field) => (
-        <BottleTextInput
-          control={control}
-          key={field.name}
-          {...field}
-          disabled={disabled || field.disabled === true}
-        />
-      ))}
-    </div>
-  );
+function ActionExplanation({ action }: { readonly action: BottleFormAction }): ReactElement | null {
+  if (action.kind === "correct-wine")
+    return (
+      <Banner
+        status="warning"
+        title={`Corrections will update all ${action.item.wineBottleCount} linked ${action.item.wineBottleCount === 1 ? "bottle" : "bottles"}.`}
+      />
+    );
+  if (action.kind === "reassign")
+    return (
+      <p>
+        This changes only this bottle's wine assignment. The original wine, reviews, awards and
+        source evidence stay with their original record. A new wine starts with empty facts and
+        evidence.
+      </p>
+    );
+  return null;
 }

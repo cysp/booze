@@ -1,12 +1,7 @@
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import type { ReactElement } from "react";
-import {
-  useController,
-  type Control,
-  type FieldPathByValue,
-  type RegisterOptions,
-} from "react-hook-form";
+import { useController, type Control, type RegisterOptions } from "react-hook-form";
 
 import { validateBottleQuantity } from "../shared/quantity.ts";
 import { QuantityInput } from "./QuantityInput.tsx";
@@ -17,44 +12,71 @@ import {
   type FormState,
 } from "./inventory-model.ts";
 
+type BottleTextField = {
+  [Name in keyof FormState]: FormState[Name] extends string ? Name : never;
+}[keyof FormState];
+
 export type BottleFormFieldProps = {
   readonly control: Control<FormState>;
   readonly label: string;
-  readonly name: FieldPathByValue<FormState, string>;
+  readonly name: BottleTextField;
   readonly placeholder?: string;
   readonly required?: boolean;
   readonly disabled?: boolean;
   readonly description?: string | undefined;
+  readonly originalForm?: FormState | undefined;
 };
+
+function isUnchangedField(
+  name: BottleTextField,
+  value: unknown,
+  values: FormState,
+  original: FormState | undefined,
+): boolean {
+  if (original === undefined || original[name] !== value) return false;
+  if (name !== "drinkFromYear" && name !== "drinkToYear") return true;
+  return (
+    values.drinkFromYear === original.drinkFromYear && values.drinkToYear === original.drinkToYear
+  );
+}
+
+function validateYear(
+  name: BottleTextField,
+  label: string,
+  value: string,
+  values: FormState,
+): string | true {
+  const year = parseOptionalYear(value);
+  if (year === undefined || year < 1800 || year > 2200)
+    return `${label} must be a whole year from 1800 to 2200.`;
+  const fromYear = name === "drinkToYear" ? parseOptionalYear(values.drinkFromYear) : undefined;
+  return fromYear !== undefined && fromYear > year
+    ? "Drink to must be on or after Drink from."
+    : true;
+}
 
 function rulesFor({
   label,
   name,
   required,
   disabled,
+  originalForm,
 }: {
   readonly label: string;
-  readonly name: FieldPathByValue<FormState, string>;
+  readonly name: BottleTextField;
   readonly required: boolean | undefined;
   readonly disabled: boolean | undefined;
-}): RegisterOptions<FormState, FieldPathByValue<FormState, string>> {
+  readonly originalForm: FormState | undefined;
+}): RegisterOptions<FormState, BottleTextField> {
   return {
     validate: (value, values) => {
       if (disabled === true) return true;
+      if (isUnchangedField(name, value, values, originalForm)) return true;
       if (typeof value !== "string" || value.trim() === "") {
         return required === true ? `${label} is required.` : true;
       }
-      if (["vintageYear", "drinkFromYear", "drinkToYear"].includes(name)) {
-        const year = parseOptionalYear(value);
-        if (year === undefined || year < 1800 || year > 2200) {
-          return `${label} must be a whole year from 1800 to 2200.`;
-        }
-        const fromYear =
-          name === "drinkToYear" ? parseOptionalYear(values.drinkFromYear) : undefined;
-        return fromYear !== undefined && fromYear > year
-          ? "Drink to must be on or after Drink from."
-          : true;
-      }
+      if (["vintageYear", "drinkFromYear", "drinkToYear"].includes(name))
+        return validateYear(name, label, value, values);
       if (name === "alcoholPercent") {
         const alcohol = parseOptionalDecimal(value);
         return alcohol !== undefined && alcohol >= 0 && alcohol <= 100
@@ -80,8 +102,16 @@ export function BottleTextInput({
   required = false,
   disabled = false,
   description,
+  originalForm,
 }: BottleFormFieldProps): ReactElement {
-  const { field, status } = useBottleField({ control, label, name, required, disabled });
+  const { field, status } = useBottleField({
+    control,
+    label,
+    name,
+    required,
+    disabled,
+    originalForm,
+  });
 
   return (
     <TextInput
@@ -108,8 +138,16 @@ export function BottleTextArea({
   placeholder,
   required = false,
   disabled = false,
+  originalForm,
 }: BottleFormFieldProps): ReactElement {
-  const { field, status } = useBottleField({ control, label, name, required, disabled });
+  const { field, status } = useBottleField({
+    control,
+    label,
+    name,
+    required,
+    disabled,
+    originalForm,
+  });
 
   return (
     <TextArea
@@ -127,11 +165,18 @@ export function BottleTextArea({
   );
 }
 
-function useBottleField({ control, label, name, required, disabled }: BottleFormFieldProps) {
+function useBottleField({
+  control,
+  label,
+  name,
+  required,
+  disabled,
+  originalForm,
+}: BottleFormFieldProps) {
   const { field, fieldState } = useController({
     control,
     name,
-    rules: rulesFor({ label, name, required, disabled }),
+    rules: rulesFor({ label, name, required, disabled, originalForm }),
   });
   return {
     field,

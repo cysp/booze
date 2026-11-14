@@ -11,7 +11,7 @@ import { lazy, Suspense, useEffect, useMemo, useState, type ReactElement } from 
 import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
 import { useDebouncedQuery } from "./useDebouncedQuery.ts";
 import { useCatalogue } from "./useCatalogue.ts";
-import { useCatalogueUrlState } from "./useCatalogueUrlState.ts";
+import { inventoryQueryPath, useCatalogueUrlState } from "./useCatalogueUrlState.ts";
 import { useReturnFocus } from "./useReturnFocus.ts";
 import {
   useBottleController,
@@ -54,6 +54,10 @@ const InventoryArea = lazy(async () => {
 const BottleModal = lazy(async () => {
   const module = await import("./BottleModal.tsx");
   return { default: module.BottleModal };
+});
+const BottleDetails = lazy(async () => {
+  const module = await import("./BottleDetails.tsx");
+  return { default: module.BottleDetails };
 });
 
 const CaptureArea = lazy(async () => {
@@ -127,15 +131,6 @@ function CatalogueWorkspace({
   const urlState = useCatalogueUrlState();
   const inventoryQuery = useDebouncedQuery(urlState.filter);
   const [captureView, setCaptureView] = useState<"action" | "all">("action");
-  const inventoryParameters = new URLSearchParams({ limit: "50" });
-  if (inventoryQuery !== "") inventoryParameters.set("query", inventoryQuery);
-  if (urlState.siteIdFilter !== "") inventoryParameters.set("siteId", urlState.siteIdFilter);
-  if (urlState.storageLocationIdFilter !== "")
-    inventoryParameters.set("storageLocationId", urlState.storageLocationIdFilter);
-  if (urlState.varietalFilter !== "")
-    inventoryParameters.set("grapeVariety", urlState.varietalFilter);
-  if (urlState.drinkStatusFilter !== "")
-    inventoryParameters.set("drinkStatus", urlState.drinkStatusFilter);
   const {
     captures,
     inventory,
@@ -153,7 +148,7 @@ function CatalogueWorkspace({
     trackPendingCapture,
   } = useCatalogue(getAuthHeaders, {
     area: urlState.area,
-    inventoryPath: `/api/bottles?${inventoryParameters.toString()}`,
+    inventoryPath: inventoryQueryPath(urlState, inventoryQuery),
     captureView,
   });
   const writableSites = useMemo(
@@ -173,6 +168,7 @@ function CatalogueWorkspace({
     drinkStatusFilter,
     filter,
     grouping,
+    inventoryStatus,
     storageLocationIdFilter,
     siteIdFilter,
     varietalFilter,
@@ -180,6 +176,7 @@ function CatalogueWorkspace({
     setDrinkStatusFilter,
     setFilter,
     setGrouping,
+    setInventoryStatus,
     setStorageLocationIdFilter,
     setSiteIdFilter,
     setVarietalFilter,
@@ -211,9 +208,7 @@ function CatalogueWorkspace({
     getAuthHeaders,
     setStatus,
   });
-  const isBottleDialogOpen =
-    bottleController.isAddOpen ||
-    (bottleController.editingBottle !== null && bottleController.editingForm !== null);
+  const isBottleDialogOpen = bottleController.isAddOpen || bottleController.selectedBottle !== null;
   const captureBottleDialogTrigger = useReturnFocus(isBottleDialogOpen, "#add-bottle-trigger");
 
   const varietalOptions = inventory.page?.facets.grapeVarieties ?? [];
@@ -277,7 +272,7 @@ function CatalogueWorkspace({
             </div>
             <dl>
               <div>
-                <dt>Bottles</dt>
+                <dt>In stock bottles</dt>
                 <dd>{summary.inStockBottleCount}</dd>
               </div>
               <div>
@@ -336,6 +331,7 @@ function CatalogueWorkspace({
                 drinkStatusOptions={drinkStatusOptions}
                 filter={filter}
                 grouping={grouping}
+                inventoryStatus={inventoryStatus}
                 items={items}
                 totalCount={inventory.page?.totalCount ?? 0}
                 hasMore={inventory.page?.nextPageToken !== null && inventory.page !== null}
@@ -361,15 +357,16 @@ function CatalogueWorkspace({
                 setDrinkStatusFilter={setDrinkStatusFilter}
                 setFilter={setFilter}
                 setGrouping={setGrouping}
+                setInventoryStatus={setInventoryStatus}
                 setStorageLocationIdFilter={setStorageLocationIdFilter}
                 setVarietalFilter={setVarietalFilter}
                 onAddBottle={() => {
                   captureBottleDialogTrigger();
                   bottleController.setIsAddOpen(true);
                 }}
-                onEditBottle={(item) => {
+                onOpenBottle={(item) => {
                   captureBottleDialogTrigger();
-                  void bottleController.openBottleEditor(item);
+                  void bottleController.openBottleDetails(item);
                 }}
               />
             ) : area === "captures" ? (
@@ -414,43 +411,34 @@ function CatalogueWorkspace({
             {bottleController.isAddOpen ? (
               <BottleModal
                 getAuthHeaders={getAuthHeaders}
-                form={bottleController.addFormDefaults}
+                action={{ kind: "add", form: bottleController.addFormDefaults }}
                 isSaving={bottleController.isSaving}
                 locations={writableLocations}
                 sites={writableSites}
-                title="Add bottle"
                 onClose={bottleController.cancelAddition}
                 onSubmit={bottleController.saveBottle}
               />
             ) : null}
 
-            {bottleController.editingBottle === null ||
-            bottleController.editingForm === null ? null : (
-              <BottleModal
+            {bottleController.selectedBottle === null ? null : (
+              <BottleDetails
+                key={bottleController.selectedBottle.id}
+                item={bottleController.selectedBottle}
+                canEdit={writableSiteIds.has(bottleController.selectedBottle.siteId)}
                 getAuthHeaders={getAuthHeaders}
-                key={bottleController.editingBottle.id}
-                form={bottleController.editingForm}
                 isSaving={bottleController.isSaving}
-                item={bottleController.editingBottle}
                 locations={writableLocations}
                 sites={writableSites}
-                title="Edit bottle"
-                onClose={() => {
-                  bottleController.setEditingBottle(null);
-                }}
-                onDelete={async () => {
-                  return bottleController.deleteBottle(bottleController.editingBottle?.id ?? "");
-                }}
-                onMarkConsumed={async () => {
-                  const updated = await bottleController.updateBottle({
-                    bottleId: bottleController.editingBottle?.id ?? "",
-                    payload: { status: "consumed" },
-                  });
-                  if (updated) {
-                    bottleController.setEditingBottle(null);
-                  }
-                  return updated;
-                }}
+                onClose={bottleController.closeBottleDetails}
+                onDelete={async () =>
+                  bottleController.deleteBottle(bottleController.selectedBottle?.id ?? "")
+                }
+                onStatusChange={async (bottleStatus) =>
+                  bottleController.updateBottle({
+                    bottleId: bottleController.selectedBottle?.id ?? "",
+                    payload: { status: bottleStatus },
+                  })
+                }
                 onSubmit={bottleController.saveBottleEdit}
               />
             )}

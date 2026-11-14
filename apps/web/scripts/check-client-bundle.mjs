@@ -1,4 +1,4 @@
-/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return, typescript/strict-boolean-expressions -- Node executes this dependency-free bundle gate directly. */
+/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Node executes this dependency-free bundle gate directly. */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
