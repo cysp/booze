@@ -1,5 +1,4 @@
 import {
-  bottleCaptures,
   bottleLocations,
   bottles,
   createD1Client,
@@ -7,30 +6,20 @@ import {
   storageLocations,
   type BoozeDatabase,
 } from "@chikachow/booze-db";
-import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import { z } from "zod";
 
-import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../api/auth.ts";
-import { upsertStorageLocation } from "../api/catalogue.ts";
+import { requireAuthenticatedUser } from "../api/auth.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
+import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
-
-const createStorageLocationSchema = z.object({
-  siteId: z.string().trim().min(1).optional(),
-  siteName: z.string().trim().min(1).max(80).optional(),
-  parentId: z.string().trim().min(1).nullable().optional(),
-  name: z.string().trim().min(1).max(120),
-  locationType: z.string().trim().min(1).max(40).default("area"),
-});
-
-const updateStorageLocationSchema = z.object({
-  parentId: z.string().trim().min(1).nullable().optional(),
-  name: z.string().trim().min(1).max(120).optional(),
-  locationType: z.string().trim().min(1).max(40).optional(),
-  notes: z.string().trim().max(2_000).optional(),
-});
+import {
+  createStorageLocation,
+  deleteStorageLocation,
+  updateStorageLocation,
+  createStorageLocationInputSchema,
+  updateStorageLocationInputSchema,
+} from "../location-operations.ts";
 
 export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
   .get("/storage-locations", async (context) => {
@@ -45,7 +34,7 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
     return context.json({ data: rows });
   })
   .post("/storage-locations", async (context) => {
-    const payload = createStorageLocationSchema.parse(await context.req.json());
+    const payload = createStorageLocationInputSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -53,50 +42,14 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
-
-    const siteId =
-      payload.siteId ??
-      (
-        await upsertSite({
-          database,
-          site: payload.siteName ?? "home",
-          userId: authenticatedUser.userId,
-        })
-      ).siteId;
-
-    await requireSitePermission({
-      database,
-      permission: "site.content.write",
-      siteId,
-      userId: authenticatedUser.userId,
+    const result = await createStorageLocation({
+      context: { database, userId: authenticatedUser.userId, source: "http" },
+      input: payload,
     });
-
-    if (payload.parentId !== undefined && payload.parentId !== null) {
-      const parents = await database
-        .select({ id: storageLocations.id })
-        .from(storageLocations)
-        .where(and(eq(storageLocations.id, payload.parentId), eq(storageLocations.siteId, siteId)))
-        .limit(1);
-      if (parents.length === 0) {
-        throw new HTTPException(400, { message: "Parent location must belong to the same site" });
-      }
-    }
-
-    const result = await upsertStorageLocation({
-      database,
-      siteId,
-      name: payload.name,
-      locationType: payload.locationType,
-      parentId: payload.parentId ?? null,
-    });
-
-    return created(
-      { id: result.storageLocationId, siteId, ...payload },
-      locationHeader(`/api/storage-locations/${result.storageLocationId}`),
-    );
+    return created(result.after, locationHeader(`/api/storage-locations/${result.after.id}`));
   })
   .patch("/storage-locations/:storageLocationId", async (context) => {
-    const payload = updateStorageLocationSchema.parse(await context.req.json());
+    const payload = updateStorageLocationInputSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -104,44 +57,12 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
-    const storageLocationId = context.req.param("storageLocationId");
-    const existing = await getStorageLocationSiteId({ database, storageLocationId });
-    await requireSitePermission({
-      database,
-      permission: "site.content.write",
-      siteId: existing.siteId,
-      userId: authenticatedUser.userId,
+    const result = await updateStorageLocation({
+      context: { database, userId: authenticatedUser.userId, source: "http" },
+      storageLocationId: context.req.param("storageLocationId"),
+      input: payload,
     });
-
-    const updated = await database
-      .update(storageLocations)
-      .set({
-        ...(payload.parentId === undefined ? {} : { parentId: payload.parentId }),
-        ...(payload.name === undefined ? {} : { name: payload.name }),
-        ...(payload.locationType === undefined ? {} : { locationType: payload.locationType }),
-        ...(payload.notes === undefined ? {} : { notes: payload.notes }),
-        updatedAt: sql`CURRENT_TIMESTAMP`,
-      })
-      .where(
-        and(
-          eq(storageLocations.id, storageLocationId),
-          payload.parentId === undefined || payload.parentId === null
-            ? undefined
-            : validParentCondition({
-                parentId: payload.parentId,
-                siteId: existing.siteId,
-                storageLocationId,
-              }),
-        ),
-      )
-      .returning({ id: storageLocations.id });
-    if (updated.length === 0) {
-      throw new HTTPException(400, {
-        message: "Parent location must belong to the same site and cannot create a cycle",
-      });
-    }
-
-    return context.json({ data: { id: storageLocationId } });
+    return context.json({ data: { id: result.after.id } });
   })
   .delete("/storage-locations/:storageLocationId", async (context) => {
     const database = createD1Client(context.env.DB);
@@ -151,54 +72,12 @@ export const storageLocationRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
-    const storageLocationId = context.req.param("storageLocationId");
-    const existing = await getStorageLocationSiteId({ database, storageLocationId });
-    await requireSitePermission({
-      database,
-      permission: "site.content.write",
-      siteId: existing.siteId,
-      userId: authenticatedUser.userId,
+    await deleteStorageLocation({
+      context: { database, userId: authenticatedUser.userId, source: "http" },
+      storageLocationId: context.req.param("storageLocationId"),
     });
-
-    await database.batch([
-      database
-        .delete(bottleLocations)
-        .where(eq(bottleLocations.storageLocationId, storageLocationId)),
-      database
-        .update(bottleCaptures)
-        .set({ storageLocationId: null, positionHint: null, updatedAt: sql`CURRENT_TIMESTAMP` })
-        .where(eq(bottleCaptures.storageLocationId, storageLocationId)),
-      database
-        .update(storageLocations)
-        .set({ parentId: null, updatedAt: sql`CURRENT_TIMESTAMP` })
-        .where(eq(storageLocations.parentId, storageLocationId)),
-      database.delete(storageLocations).where(eq(storageLocations.id, storageLocationId)),
-    ]);
-
     return noContent();
   });
-
-function validParentCondition({
-  parentId,
-  siteId,
-  storageLocationId,
-}: {
-  readonly parentId: string;
-  readonly siteId: string;
-  readonly storageLocationId: string;
-}): SQL {
-  // Keep the ancestry check inside the UPDATE so concurrent moves cannot form a cycle.
-  return sql`exists (select 1 from storage_locations where id = ${parentId} and site_id = ${siteId})
-    and not exists (
-      with recursive ancestors(id, parent_id) as (
-        select id, parent_id from storage_locations where id = ${parentId} and site_id = ${siteId}
-        union
-        select parent.id, parent.parent_id from storage_locations parent
-        join ancestors on parent.id = ancestors.parent_id where parent.site_id = ${siteId}
-      )
-      select 1 from ancestors where id = ${storageLocationId}
-    )`;
-}
 
 type StorageLocationListRow = {
   readonly id: string;
@@ -292,24 +171,4 @@ function storageLocationDisplayName({
     parentId = parent.parentId;
   }
   return parts.join(" / ");
-}
-
-async function getStorageLocationSiteId({
-  database,
-  storageLocationId,
-}: {
-  readonly database: BoozeDatabase;
-  readonly storageLocationId: string;
-}): Promise<{ readonly siteId: string }> {
-  const rows = await database
-    .select({ siteId: storageLocations.siteId })
-    .from(storageLocations)
-    .where(eq(storageLocations.id, storageLocationId))
-    .limit(1);
-
-  const row = rows[0];
-  if (row === undefined) {
-    throw new HTTPException(404, { message: "Storage location not found" });
-  }
-  return row;
 }

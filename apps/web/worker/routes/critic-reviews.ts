@@ -2,29 +2,18 @@ import { createD1Client } from "@chikachow/booze-db";
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { requireAuthenticatedUser, requireSitePermission } from "../api/auth.ts";
+import { requireAuthenticatedUser } from "../api/auth.ts";
 import {
   createOrUpdateReviewSource,
+  criticReviewInputSchema,
   deleteCriticReview,
   listCriticReviews,
   listReviewSources,
   replaceCriticReviewsForWine,
   upsertCriticReview,
 } from "../api/critic-reviews.ts";
+import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
-
-export const criticReviewInputSchema = z.object({
-  id: z.string().trim().min(1).max(120).optional(),
-  reviewSourceId: z.string().trim().min(1).max(120).optional(),
-  reviewSourceName: z.string().trim().min(1).max(160).optional(),
-  ratingText: z.string().trim().min(1).max(160),
-  ratingValue: z.number().min(0).max(1000).optional(),
-  ratingScale: z.string().trim().max(80).optional(),
-  sourceUrl: z.url().trim().max(500).optional().or(z.literal("")),
-  reviewedAt: z.string().trim().max(80).optional(),
-  provenance: z.string().trim().max(500).optional(),
-  notes: z.string().trim().max(1_000).optional(),
-});
 
 const reviewSourceInputSchema = z.object({
   siteId: z.string().trim().min(1),
@@ -74,7 +63,7 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
     return context.json({ data: sources });
   })
   .post("/review-sources", async (context) => {
-    const payload = reviewSourceInputSchema.parse(await context.req.json());
+    const payload = reviewSourceInputSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -86,6 +75,7 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
       database,
       input: payload,
       userId: authenticatedUser.userId,
+      source: "http",
     });
     return context.json({ data: source }, 201);
   })
@@ -108,7 +98,7 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
     return context.json({ data: reviews });
   })
   .put("/critic-reviews", async (context) => {
-    const payload = upsertCriticReviewSchema.parse(await context.req.json());
+    const payload = upsertCriticReviewSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -121,14 +111,17 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
       review: payload.review,
       userId: authenticatedUser.userId,
       wineVintageId: payload.wineVintageId,
+      source: "http",
     });
     return context.json({ data: review });
   })
   .put("/wines/:wineVintageId/critic-reviews", async (context) => {
-    const payload = replaceCriticReviewsSchema.parse({
-      ...(await context.req.json()),
+    const payload = {
+      ...replaceCriticReviewsSchema
+        .omit({ wineVintageId: true })
+        .parse(await readRequestJson(context.req.raw)),
       wineVintageId: context.req.param("wineVintageId"),
-    });
+    };
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -136,18 +129,13 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
-    await requireSitePermission({
-      database,
-      permission: "site.content.write",
-      siteId: payload.siteId,
-      userId: authenticatedUser.userId,
-    });
     const reviews = await replaceCriticReviewsForWine({
       database,
       reviews: payload.reviews,
       siteId: payload.siteId,
       userId: authenticatedUser.userId,
       wineVintageId: payload.wineVintageId,
+      source: "http",
     });
     return context.json({ data: reviews });
   })
@@ -162,6 +150,7 @@ export const criticReviewRoutes = new Hono<{ Bindings: Bindings }>()
     await deleteCriticReview({
       database,
       reviewId: context.req.param("reviewId"),
+      source: "http",
       userId: authenticatedUser.userId,
     });
     return new Response(null, { status: 204 });

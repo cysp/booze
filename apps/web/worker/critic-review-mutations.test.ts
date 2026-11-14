@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { createD1Client, type BoozeDatabase } from "@chikachow/booze-db";
 import { Hono } from "hono";
+import { z } from "zod";
 
 import { prepareCriticReviewStatements } from "./api/critic-reviews.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
@@ -131,6 +132,285 @@ await describe("critic review mutation preservation", async () => {
   });
 });
 
+await describe("complete critic review operations", async () => {
+  await it("audits HTTP source and review writes, including unchanged facts with count zero", async () => {
+    const { sqlite } = setup();
+    const d1 = asD1(sqlite);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const source = await request(
+        d1,
+        "/review-sources",
+        { siteId: "site-one", name: "Critic" },
+        "POST",
+      );
+      assert.equal(source.status, 201, await source.clone().text());
+      const review = await request(d1, "/critic-reviews", {
+        wineVintageId: "wine-one",
+        review: { reviewSourceId: "source-one", ratingText: "95 points" },
+      });
+      assert.equal(review.status, 200, await review.clone().text());
+    }
+    const audits = sqlite
+      .prepare(
+        "SELECT tool_name, affected_record_count, target_persisted_id, input_json FROM mcp_tool_audit_events ORDER BY rowid",
+      )
+      .all();
+    assert.deepEqual(
+      audits.map((row) => [row["tool_name"], row["affected_record_count"]]),
+      [
+        ["http.cellar.create_review_source", 0],
+        ["http.cellar.upsert_critic_review", 1],
+        ["http.cellar.create_review_source", 0],
+        ["http.cellar.upsert_critic_review", 0],
+      ],
+    );
+    for (const audit of audits)
+      assert.equal(
+        z.object({ source: z.string() }).parse(JSON.parse(String(audit["input_json"]))).source,
+        "http",
+      );
+  });
+
+  for (const operation of ["source", "upsert", "replace", "delete"] as const) {
+    await it(`rejects a ${operation} after its authorizing role is downgraded before commit`, async () => {
+      const { sqlite } = setup();
+      seedReview(sqlite);
+      const d1 = asD1(sqlite);
+      const before = reviewState(sqlite);
+      injectBeforeCommit(d1, () => {
+        sqlite.exec(
+          "UPDATE site_memberships SET role = 'viewer' WHERE user_id = 'user_dev-reviewer'",
+        );
+      });
+      const response = await mutate(d1, operation);
+      assert.equal(response.status, 403, await response.clone().text());
+      assert.deepEqual(reviewState(sqlite), before);
+      assert.equal(
+        sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+        0,
+      );
+    });
+
+    await it(`rolls back the HTTP ${operation} when storing its audit fails`, async () => {
+      const { sqlite } = setup();
+      seedReview(sqlite);
+      const before = reviewState(sqlite);
+      sqlite.exec(
+        "CREATE TRIGGER fail_audit BEFORE UPDATE ON mcp_tool_audit_events BEGIN SELECT RAISE(ABORT, 'Audit unavailable'); END",
+      );
+      const response = await mutate(asD1(sqlite), operation);
+      assert.equal(response.status, 500, await response.clone().text());
+      assert.deepEqual(reviewState(sqlite), before);
+      assert.equal(
+        sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+        0,
+      );
+    });
+
+    await it(`takes the ${operation} before snapshot from the committing transaction`, async () => {
+      const { sqlite } = setup();
+      seedReview(sqlite);
+      const d1 = asD1(sqlite);
+      injectBeforeCommit(d1, () => {
+        sqlite.exec(
+          "UPDATE review_sources SET notes = 'Concurrent source edit' WHERE id = 'source-one'; UPDATE critic_reviews SET notes = 'Concurrent review edit' WHERE id = 'review-one'",
+        );
+      });
+      const response = await mutate(d1, operation);
+      assert.ok(response.ok, await response.clone().text());
+      const row = sqlite
+        .prepare("SELECT before_json, after_json, affected_record_count FROM mcp_tool_audit_events")
+        .get();
+      assert.ok(row);
+      const before: unknown = JSON.parse(String(row["before_json"]));
+      if (operation === "source")
+        assert.equal(z.object({ notes: z.string() }).parse(before).notes, "Concurrent source edit");
+      else if (operation === "replace")
+        assert.equal(
+          z.object({ reviews: z.array(z.object({ notes: z.string() })).min(1) }).parse(before)
+            .reviews[0]?.notes,
+          "Concurrent review edit",
+        );
+      else
+        assert.equal(z.object({ notes: z.string() }).parse(before).notes, "Concurrent review edit");
+      assert.equal(row["affected_record_count"], 1);
+      const after: unknown = JSON.parse(String(row["after_json"]));
+      if (operation === "delete") assert.deepEqual(after, {});
+      else if (operation === "source")
+        assert.equal(z.object({ notes: z.string() }).parse(after).notes, "Saved source");
+      else if (operation === "replace")
+        assert.equal(
+          z.object({ reviews: z.array(z.object({ ratingText: z.string() })).min(1) }).parse(after)
+            .reviews[0]?.ratingText,
+          "97 points",
+        );
+      else assert.equal(z.object({ ratingText: z.string() }).parse(after).ratingText, "97 points");
+    });
+  }
+
+  await it("rejects a review source that becomes inactive before commit", async () => {
+    const { sqlite } = setup();
+    const d1 = asD1(sqlite);
+    injectBeforeCommit(d1, () => {
+      sqlite.exec("UPDATE review_sources SET is_active = 0 WHERE id = 'source-one'");
+    });
+    const response = await mutate(d1, "upsert");
+    assert.equal(response.status, 400, await response.clone().text());
+    assert.equal(
+      sqlite
+        .prepare("SELECT count(*) AS count FROM critic_reviews WHERE wine_vintage_id = 'wine-one'")
+        .get()?.["count"],
+      0,
+    );
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+      0,
+    );
+  });
+
+  await it("does not classify an unrelated source constraint failure as an unavailable source", async () => {
+    const { sqlite } = setup();
+    sqlite.exec(
+      "CREATE TRIGGER fail_audit BEFORE INSERT ON mcp_tool_audit_events BEGIN SELECT RAISE(ABORT, 'NOT NULL constraint failed: review_sources.name'); END",
+    );
+    const response = await mutate(asD1(sqlite), "upsert");
+    assert.equal(response.status, 500, await response.clone().text());
+    assert.equal(
+      sqlite
+        .prepare("SELECT count(*) AS count FROM critic_reviews WHERE wine_vintage_id = 'wine-one'")
+        .get()?.["count"],
+      0,
+    );
+  });
+
+  await it("rejects source and wine site mismatches without changing evidence", async () => {
+    const { sqlite } = setup();
+    sqlite.exec(`INSERT INTO sites (id, name) VALUES ('site-other', 'Other cellar');
+      INSERT INTO wineries (id, site_id, name) VALUES ('winery-other', 'site-other', 'Other estate');
+      INSERT INTO wine_vintages (id, site_id, winery_id, base_name, display_name, vintage_label)
+        VALUES ('wine-other', 'site-other', 'winery-other', 'Other', 'Other', '2020');
+      INSERT INTO review_sources (id, site_id, name) VALUES ('source-other', 'site-other', 'Other critic')`);
+    const before = reviewState(sqlite);
+    const sourceMismatch = await request(asD1(sqlite), "/critic-reviews", {
+      wineVintageId: "wine-one",
+      review: { reviewSourceId: "source-other", ratingText: "100" },
+    });
+    assert.equal(sourceMismatch.status, 400);
+    const wineMismatch = await request(asD1(sqlite), "/wines/wine-other/critic-reviews", {
+      siteId: "site-one",
+      reviews: [{ reviewSourceId: "source-one", ratingText: "100" }],
+    });
+    assert.equal(wineMismatch.status, 404);
+    assert.deepEqual(reviewState(sqlite), before);
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+      0,
+    );
+  });
+
+  await it("counts replacements by changed review identity and audits a repeated replacement as zero", async () => {
+    const { sqlite } = setup();
+    seedReview(sqlite);
+    const d1 = asD1(sqlite);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await request(d1, "/wines/wine-one/critic-reviews", {
+        siteId: "site-one",
+        reviews: [
+          { reviewSourceId: "source-one", ratingText: "97 points" },
+          { reviewSourceName: "Second critic", ratingText: "Gold" },
+        ],
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+    }
+    assert.deepEqual(
+      sqlite
+        .prepare("SELECT affected_record_count FROM mcp_tool_audit_events ORDER BY rowid")
+        .all()
+        .map((row) => row["affected_record_count"]),
+      [2, 0],
+    );
+    assert.equal(
+      sqlite
+        .prepare("SELECT rating_text FROM critic_reviews WHERE id = 'unrelated-review'")
+        .get()?.["rating_text"],
+      "91 points",
+    );
+  });
+
+  await it("rejects a review deleted before commit without inventing a successful delete audit", async () => {
+    const { sqlite } = setup();
+    seedReview(sqlite);
+    const d1 = asD1(sqlite);
+    injectBeforeCommit(d1, () => {
+      sqlite.exec("DELETE FROM critic_reviews WHERE id = 'review-one'");
+    });
+    const response = await mutate(d1, "delete");
+    assert.equal(response.status, 404, await response.clone().text());
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+      0,
+    );
+  });
+});
+
+function injectBeforeCommit(d1: D1Database, change: () => void): void {
+  let injected = false;
+  const inject = () => {
+    if (!injected) {
+      injected = true;
+      change();
+    }
+  };
+  const batch = d1.batch.bind(d1);
+  d1.batch = async <T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> => {
+    inject();
+    return batch<T>(statements);
+  };
+  const prepare = d1.prepare.bind(d1);
+  d1.prepare = (query) => {
+    // The historical standalone delete never used batch. Inject before that
+    // write too, so unchanged expectations exercise the old race precisely.
+    if (/^delete from "critic_reviews"/iu.test(query.trim())) inject();
+    return prepare(query);
+  };
+}
+
+function seedReview(sqlite: ReturnType<typeof migratedDatabase>): void {
+  sqlite.exec(
+    "INSERT INTO critic_reviews (id, site_id, wine_vintage_id, review_source_id, rating_text, notes) VALUES ('review-one', 'site-one', 'wine-one', 'source-one', '95 points', 'Original review')",
+  );
+}
+
+function reviewState(sqlite: ReturnType<typeof migratedDatabase>) {
+  return {
+    sources: sqlite.prepare("SELECT * FROM review_sources ORDER BY id").all(),
+    reviews: sqlite.prepare("SELECT * FROM critic_reviews ORDER BY id").all(),
+  };
+}
+
+async function mutate(
+  d1: D1Database,
+  operation: "source" | "upsert" | "replace" | "delete",
+): Promise<Response> {
+  if (operation === "source")
+    return request(
+      d1,
+      "/review-sources",
+      { siteId: "site-one", name: "Critic", notes: "Saved source" },
+      "POST",
+    );
+  if (operation === "delete") return request(d1, "/critic-reviews/review-one", {}, "DELETE");
+  if (operation === "replace")
+    return request(d1, "/wines/wine-one/critic-reviews", {
+      siteId: "site-one",
+      reviews: [{ reviewSourceId: "source-one", ratingText: "97 points" }],
+    });
+  return request(d1, "/critic-reviews", {
+    wineVintageId: "wine-one",
+    review: { reviewSourceId: "source-one", ratingText: "97 points" },
+  });
+}
+
 function setup() {
   const sqlite = migratedDatabase();
   sqlite.exec(`
@@ -161,6 +441,7 @@ async function request(
   database: D1Database,
   path: string,
   payload: Record<string, unknown>,
+  method = "PUT",
 ): Promise<Response> {
   const app = new Hono<{ Bindings: Bindings }>()
     .route("/", criticReviewRoutes)
@@ -170,7 +451,7 @@ async function request(
   return app.request(
     `http://localhost${path}`,
     {
-      method: "PUT",
+      method,
       headers: { "content-type": "application/json", "x-dev-user": "reviewer" },
       body: JSON.stringify(payload),
     },
