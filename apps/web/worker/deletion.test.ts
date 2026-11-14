@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import type { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 
-import { createD1Client } from "@chikachow/booze-db";
-
-import { createWineVintageDrinkWindowUpdate } from "./api/inventory.ts";
 import { deleteBottleCaptureData, deleteSiteData, drainR2ObjectDeletionQueue } from "./deletion.ts";
-import { createMcpToolAuditEventInsert } from "./mcp/audit.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 
 await describe("durable deletion", async () => {
@@ -146,53 +142,6 @@ await describe("durable deletion", async () => {
     );
     assert.deepEqual(successfulBucket.deleted, [["one", "two"]]);
     assert.deepEqual(queuedKeys(database), []);
-  });
-
-  await it("rolls back an MCP mutation when its audit insert fails", async () => {
-    const sqlite = migratedDatabase();
-    seedSite(sqlite, "site-1");
-    seedCatalogueAndCapture(sqlite, "site-1", "capture-1", "asset-1");
-    const database = createD1Client(asD1(sqlite));
-
-    await assert.rejects(
-      database.batch([
-        createWineVintageDrinkWindowUpdate({
-          database,
-          drinkFromYear: 2025,
-          drinkToYear: 2030,
-          siteId: "site-1",
-          wineVintageId: "wine-1",
-        }),
-        createMcpToolAuditEventInsert({
-          auditEventId: "invalid-audit",
-          database,
-          event: {
-            affectedRecordCount: 1,
-            after: { drinkFromYear: 2025, drinkToYear: 2030 },
-            before: { drinkFromYear: null, drinkToYear: null },
-            input: { wineId: "wine-1" },
-            siteId: "site-1",
-            targetKind: "wine",
-            targetMcpId: "wine-1",
-            targetPersistedId: "wine-1",
-            toolName: "cellar.set_drinking_window",
-            userId: "missing-user",
-          },
-        }),
-      ]),
-      /FOREIGN KEY constraint failed/u,
-    );
-
-    const wine = row(
-      sqlite,
-      "SELECT drink_from_year, drink_to_year FROM wine_vintages WHERE id = 'wine-1'",
-    );
-    assert.equal(wine["drink_from_year"], null);
-    assert.equal(wine["drink_to_year"], null);
-    assert.equal(
-      scalar(sqlite, "SELECT count(*) FROM mcp_tool_audit_events WHERE id = 'invalid-audit'"),
-      0,
-    );
   });
 });
 

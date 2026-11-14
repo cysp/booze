@@ -535,25 +535,47 @@ export const inventorySummarySchema = z.object({
   sites: z.array(siteSummarySchema),
 });
 
+const mutationResultFields = {
+  changed: z.boolean(),
+  affectedRecordCount: z.number().int().nonnegative(),
+};
+const locationMutationFactsSchema = z.object({
+  id: z.string(),
+  siteId: z.string(),
+  parentId: z.string().nullable(),
+  name: z.string(),
+  locationType: z.string(),
+  notes: z.string().nullable(),
+});
 export const createStorageLocationOutputSchema = z.object({
-  changed: z.boolean(),
-  location: storageLocationSummarySchema,
+  ...mutationResultFields,
+  before: locationMutationFactsSchema.nullable(),
+  after: locationMutationFactsSchema,
 });
-
-export const setBottleLocationOutputSchema = z.object({
-  bottle: bottleDetailSchema,
-  changed: z.boolean(),
-  previousPosition: nullableStringSchema,
-  previousStorageLocation: nullableStringSchema,
-  previousStorageLocationId: storageLocationIdOutputSchema,
-  position: nullableStringSchema,
-  storageLocation: nullableStringSchema,
-  storageLocationId: storageLocationIdOutputSchema,
-});
-
-export const markBottleConsumedOutputSchema = z.object({
-  bottle: bottleDetailSchema,
-  changed: z.boolean(),
-  previousStatus: z.string(),
+const bottleMutationFactsSchema = z.object({
+  bottleId: z.string(),
+  siteId: z.string(),
+  wineVintageId: z.string(),
   status: z.string(),
+  storageLocationId: z.string().nullable(),
+  positionHint: z.string().nullable(),
+});
+export const setBottleLocationOutputSchema = z.object({
+  ...mutationResultFields,
+  before: bottleMutationFactsSchema,
+  after: bottleMutationFactsSchema.nullable(),
+});
+export const markBottleConsumedOutputSchema = setBottleLocationOutputSchema;
+const wineWindowFactsSchema = z.object({
+  id: z.string(),
+  siteId: z.string(),
+  drinkFromYear: z.number().nullable(),
+  drinkToYear: z.number().nullable(),
+  bottleCount: z.number().int().nonnegative(),
+});
+export const setDrinkingWindowOutputSchema = z.object({
+  ...mutationResultFields,
+  affectedBottleCount: z.number().int().nonnegative(),
+  before: wineWindowFactsSchema,
+  after: wineWindowFactsSchema,
 });

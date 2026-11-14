@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 
 import { ensureAuthenticatedClerkUser } from "../api/auth.ts";
+import { readRequestBytes } from "../api/request-body.ts";
 import type { Bindings, AuthenticatedUser } from "../api/types.ts";
 import { createBoozeMcpServer } from "../mcp/server.ts";
 
@@ -43,7 +44,14 @@ export const mcpRoutes = new Hono<{ Bindings: Bindings }>()
       userId: authenticatedUser.userId,
     });
     await server.connect(transport);
-    const response = await transport.handleRequest(context.req.raw);
+    const request =
+      context.req.raw.body === null
+        ? context.req.raw
+        : new Request(context.req.raw, {
+            method: context.req.method,
+            body: (await readRequestBytes(context.req.raw)).buffer,
+          });
+    const response = await transport.handleRequest(request);
     return addMcpHeaders(response);
   });
 
@@ -80,18 +88,10 @@ async function authenticateMcpUser({
     return null;
   }
 
-  try {
-    const accessToken = await verifyClerkOAuthAccessToken({ secretKey, token });
-    if (accessToken !== null) {
-      return await ensureAuthenticatedClerkUser({
-        database,
-        clerkUserId: accessToken.clerkUserId,
-      });
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  const accessToken = await verifyClerkOAuthAccessToken({ secretKey, token });
+  return accessToken === null
+    ? null
+    : ensureAuthenticatedClerkUser({ database, clerkUserId: accessToken.clerkUserId });
 }
 
 async function verifyClerkOAuthAccessToken({
@@ -101,20 +101,23 @@ async function verifyClerkOAuthAccessToken({
   readonly secretKey: string;
   readonly token: string;
 }): Promise<{ readonly clerkUserId: string } | null> {
-  const response = await fetch(CLERK_OAUTH_TOKEN_VERIFY_URL, {
-    body: JSON.stringify({ access_token: token }),
-    headers: {
-      authorization: `Bearer ${secretKey}`,
-      "content-type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    return null;
+  let response: Response;
+  let body: unknown;
+  try {
+    response = await fetch(CLERK_OAUTH_TOKEN_VERIFY_URL, {
+      body: JSON.stringify({ access_token: token }),
+      headers: {
+        authorization: `Bearer ${secretKey}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    if ([400, 401, 403].includes(response.status)) return null;
+    if (!response.ok) throw new Error("Token verification service failed");
+    body = await response.json();
+  } catch (cause) {
+    throw new HTTPException(503, { cause, message: "Authentication service unavailable" });
   }
-
-  const body = await response.json();
   const clerkUserId = clerkOAuthSubject(body);
   if (clerkUserId === null) {
     return null;

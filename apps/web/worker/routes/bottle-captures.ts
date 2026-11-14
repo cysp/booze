@@ -11,6 +11,7 @@ import { z } from "zod";
 import { requireAuthenticatedUser, requireSitePermission } from "../api/auth.ts";
 import { created, noContent } from "../api/http.ts";
 import { optionalText } from "../api/ids.ts";
+import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
 import { getCommittedCaptureImport, importReviewedCapture } from "../bottle-importer.ts";
 import type { ImportCandidate } from "../bottle-extractor.ts";
@@ -245,7 +246,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
         expectedRevision: z.number().int().nonnegative(),
         candidate: captureReviewCandidateSchema,
       })
-      .parse(await context.req.json());
+      .parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const user = await requireAuthenticatedUser({
       database,
@@ -273,7 +274,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     return context.json({ data: { reviewRevision, reviewCandidate: payload.candidate } });
   })
   .post("/bottle-captures/:captureId/import", async (context) => {
-    const payload = manualImportSchema.parse(await context.req.json());
+    const payload = manualImportSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,

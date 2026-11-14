@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../api/auth.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
+import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
 import { deleteSiteData, tryDrainR2ObjectDeletionQueue } from "../deletion.ts";
 
@@ -38,7 +39,7 @@ export const siteRoutes = new Hono<{ Bindings: Bindings }>()
     return context.json({ data: rows });
   })
   .post("/sites", async (context) => {
-    const payload = createSiteSchema.parse(await context.req.json());
+    const payload = createSiteSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
@@ -59,7 +60,7 @@ export const siteRoutes = new Hono<{ Bindings: Bindings }>()
     );
   })
   .patch("/sites/:siteId", async (context) => {
-    const payload = updateSiteSchema.parse(await context.req.json());
+    const payload = updateSiteSchema.parse(await readRequestJson(context.req.raw));
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
       database,
