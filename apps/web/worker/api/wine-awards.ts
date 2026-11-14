@@ -18,22 +18,8 @@ export type WineAwardInput = {
   readonly notes?: string | undefined;
 };
 
-export type WineAwardResource = {
-  readonly id: string;
-  readonly siteId: string;
-  readonly wineVintageId: string;
-  readonly awardName: string;
-  readonly awardLevel: string;
-  readonly awardYear: number | null;
-  readonly awardBody: string | null;
-  readonly category: string | null;
-  readonly points: number | null;
-  readonly sourceUrl: string | null;
-  readonly provenance: string | null;
-  readonly notes: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-};
+import type { WineAwardResource } from "../../shared/catalogue-resources.ts";
+export type { WineAwardResource } from "../../shared/catalogue-resources.ts";
 
 type WineAwardIdentity = Pick<WineAwardResource, "awardName" | "awardLevel" | "awardYear">;
 

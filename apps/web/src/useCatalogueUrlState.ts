@@ -9,7 +9,8 @@ export type CatalogueUrlState = {
   readonly drinkStatusFilter: DrinkStatusFilter;
   readonly filter: string;
   readonly grouping: InventoryGrouping;
-  readonly locationFilter: string;
+  readonly storageLocationIdFilter: string;
+  readonly siteIdFilter: string;
   readonly varietalFilter: string;
 };
 
@@ -18,7 +19,8 @@ type CatalogueUrlController = CatalogueUrlState & {
   readonly setDrinkStatusFilter: (value: string) => void;
   readonly setFilter: (value: string) => void;
   readonly setGrouping: (value: InventoryGrouping) => void;
-  readonly setLocationFilter: (value: string) => void;
+  readonly setSiteIdFilter: (value: string) => void;
+  readonly setStorageLocationIdFilter: (value: string) => void;
   readonly setVarietalFilter: (value: string) => void;
 };
 
@@ -27,7 +29,8 @@ const defaultState: CatalogueUrlState = {
   drinkStatusFilter: "",
   filter: "",
   grouping: "winery",
-  locationFilter: "",
+  storageLocationIdFilter: "",
+  siteIdFilter: "",
   varietalFilter: "",
 };
 
@@ -39,7 +42,8 @@ export function catalogueStateFromUrl(url: URL): CatalogueUrlState {
     drinkStatusFilter: parseDrinkStatus(url.searchParams.get("drink")),
     filter: url.searchParams.get("q") ?? "",
     grouping: grouping === "storage" ? "storage" : "winery",
-    locationFilter: url.searchParams.get("location") ?? "",
+    storageLocationIdFilter: url.searchParams.get("storageLocationId") ?? "",
+    siteIdFilter: url.searchParams.get("siteId") ?? "",
     varietalFilter: url.searchParams.get("varietal") ?? "",
   };
 }
@@ -50,7 +54,9 @@ export function catalogueUrlWithState(url: URL, state: CatalogueUrlState): URL {
   setOptionalParameter(next, "grouping", state.grouping, defaultState.grouping);
   setOptionalParameter(next, "q", state.filter);
   setOptionalParameter(next, "varietal", state.varietalFilter);
-  setOptionalParameter(next, "location", state.locationFilter);
+  setOptionalParameter(next, "storageLocationId", state.storageLocationIdFilter);
+  setOptionalParameter(next, "siteId", state.siteIdFilter);
+  next.searchParams.delete("location");
   setOptionalParameter(next, "drink", state.drinkStatusFilter);
   return next;
 }
@@ -100,8 +106,11 @@ export function useCatalogueUrlState(): CatalogueUrlController {
     setGrouping: (value: InventoryGrouping): void => {
       update("grouping", value, "push");
     },
-    setLocationFilter: (value: string): void => {
-      update("locationFilter", value, "replace");
+    setSiteIdFilter: (value: string): void => {
+      update("siteIdFilter", value, "replace");
+    },
+    setStorageLocationIdFilter: (value: string): void => {
+      update("storageLocationIdFilter", value, "replace");
     },
     setVarietalFilter: (value: string): void => {
       update("varietalFilter", value, "replace");

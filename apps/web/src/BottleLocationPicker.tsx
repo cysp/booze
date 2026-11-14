@@ -28,13 +28,13 @@ export function BottleLocationPicker({
   sites,
   onChange,
 }: BottleLocationPickerProps): ReactElement {
-  const selectedSite = sites.find((site) => site.siteId === selectedSiteId);
+  const selectedSite = sites.find((site) => site.id === selectedSiteId);
   const selectableSites = disabledSite && selectedSite !== undefined ? [selectedSite] : sites;
   const siteLocations = locations
     .filter((location) => location.siteId === selectedSiteId)
     .toSorted(compareLocationPath(locations));
   const selectedStorageLocation = siteLocations.find(
-    (location) => location.locationId === selectedStorageLocationId,
+    (location) => location.id === selectedStorageLocationId,
   );
   const selectedValue = bottleLocationValue(
     selectedSiteId,

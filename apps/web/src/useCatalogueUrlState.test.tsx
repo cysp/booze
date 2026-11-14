@@ -30,13 +30,29 @@ describe("catalogue URL state", () => {
       drinkStatusFilter: "hold",
       filter: "",
       grouping: "storage",
-      locationFilter: "",
+      storageLocationIdFilter: "",
+      siteIdFilter: "",
       varietalFilter: "Shiraz",
     });
     expect(url.searchParams.get("area")).toBeNull();
     expect(url.searchParams.get("grouping")).toBe("storage");
     expect(url.searchParams.get("varietal")).toBe("Shiraz");
     expect(url.searchParams.get("unknown")).toBe("kept");
+  });
+
+  it("round-trips opaque site and location IDs independently of display names", () => {
+    const siteId = "site/with spaces?and=punctuation";
+    const storageLocationId = "rack / leaf (旧名)";
+    const state = {
+      ...catalogueStateFromUrl(new URL("https://example.test/")),
+      siteIdFilter: siteId,
+      storageLocationIdFilter: storageLocationId,
+    };
+    const url = catalogueUrlWithState(new URL("https://example.test/?location=Old+cellar"), state);
+    expect(url.searchParams.get("siteId")).toBe(siteId);
+    expect(url.searchParams.get("storageLocationId")).toBe(storageLocationId);
+    expect(url.searchParams.has("location")).toBe(false);
+    expect(catalogueStateFromUrl(url)).toEqual(state);
   });
 
   it("restores state on browser history navigation", () => {

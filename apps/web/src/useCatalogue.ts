@@ -8,21 +8,21 @@ import {
 } from "react";
 
 import {
-  apiBottleToInventoryItem,
-  apiLocationToLocationItem,
-  apiSiteToSiteItem,
-  isApiEnvelope,
-  isBottleResource,
-  isCaptureResource,
-  isSiteResource,
-  isStorageLocationResource,
+  inventoryItem,
   type CaptureResource,
   type InventoryItem,
   type LocationItem,
   type SiteItem,
 } from "./inventory-model.ts";
 
-import { isWineOption, type WineOption } from "../shared/wine-options.ts";
+import { z } from "zod";
+import {
+  bottleResourceSchema,
+  captureResourceSchema,
+  siteResourceSchema,
+  storageLocationResourceSchema,
+} from "../shared/catalogue-resources.ts";
+import { wineOptionSchema, type WineOption } from "../shared/wine-options.ts";
 
 type AuthHeadersProvider = () => Promise<Record<string, string>>;
 type CollectionName = "inventory" | "locations" | "sites" | "captures" | "wines";
@@ -35,7 +35,7 @@ const collectionNames: readonly CollectionName[] = [
 ];
 type RefreshResult = "refreshed" | "superseded";
 type CollectionRequest<Resource> = {
-  readonly isResource: (value: unknown) => value is Resource;
+  readonly schema: z.ZodType<Resource>;
   readonly path: string;
   readonly resourceName: string;
 };
@@ -118,19 +118,19 @@ export function useCatalogue(getAuthHeaders: AuthHeadersProvider): CatalogueCont
 
   const loadInventory = useCallback(async (): Promise<RefreshResult> => {
     const data = await loadLatestCollection("inventory", {
-      isResource: isBottleResource,
+      schema: bottleResourceSchema,
       path: "/api/bottles",
       resourceName: "Inventory",
     });
     if (data === null) return "superseded";
-    const nextItems = data.map((item) => apiBottleToInventoryItem(item));
+    const nextItems = data.map((item) => inventoryItem(item));
     setItems(nextItems);
     return "refreshed";
   }, [loadLatestCollection]);
 
   const loadWines = useCallback(async (): Promise<RefreshResult> => {
     const data = await loadLatestCollection("wines", {
-      isResource: isWineOption,
+      schema: wineOptionSchema,
       path: "/api/wines",
       resourceName: "Wines",
     });
@@ -141,29 +141,29 @@ export function useCatalogue(getAuthHeaders: AuthHeadersProvider): CatalogueCont
 
   const loadLocations = useCallback(async (): Promise<RefreshResult> => {
     const data = await loadLatestCollection("locations", {
-      isResource: isStorageLocationResource,
+      schema: storageLocationResourceSchema,
       path: "/api/storage-locations",
       resourceName: "Locations",
     });
     if (data === null) return "superseded";
-    setLocations(data.map((location) => apiLocationToLocationItem(location)));
+    setLocations(data);
     return "refreshed";
   }, [loadLatestCollection]);
 
   const loadSites = useCallback(async (): Promise<RefreshResult> => {
     const data = await loadLatestCollection("sites", {
-      isResource: isSiteResource,
+      schema: siteResourceSchema,
       path: "/api/sites",
       resourceName: "Sites",
     });
     if (data === null) return "superseded";
-    setSites(data.map((site) => apiSiteToSiteItem(site)));
+    setSites(data);
     return "refreshed";
   }, [loadLatestCollection]);
 
   const loadCaptures = useCallback(async (): Promise<RefreshResult> => {
     const data = await loadLatestCollection("captures", {
-      isResource: isCaptureResource,
+      schema: captureResourceSchema,
       path: "/api/bottle-captures",
       resourceName: "Captures",
     });
@@ -359,7 +359,7 @@ export function useCatalogue(getAuthHeaders: AuthHeadersProvider): CatalogueCont
 
 async function loadCollection<Resource>({
   getAuthHeaders,
-  isResource,
+  schema,
   path,
   resourceName,
 }: CollectionRequest<Resource> & {
@@ -370,13 +370,11 @@ async function loadCollection<Resource>({
     throw new Error(`${resourceName} request failed`);
   }
   const payload: unknown = await response.json();
-  if (
-    !isApiEnvelope(payload, (data): data is readonly unknown[] => Array.isArray(data)) ||
-    !payload.data.every(isResource)
-  ) {
+  const result = z.object({ data: z.array(schema) }).safeParse(payload);
+  if (!result.success) {
     throw new Error(`${resourceName} response was invalid`);
   }
-  return payload.data;
+  return result.data.data;
 }
 
 function isPendingCapture(capture: CaptureResource): boolean {

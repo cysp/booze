@@ -16,6 +16,13 @@ import { and, eq, getTableColumns, sql, type SQL } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { additionFingerprint, additionOperationIdSchema } from "../shared/addition-operation.ts";
+import {
+  bottleInputSchema,
+  bottleQuantitySchema,
+  wineInputSchema,
+  winePatchInputSchema,
+} from "../shared/catalogue-inputs.ts";
+import { entityIdSchema } from "../shared/entity-id.ts";
 import { formatWineDisplayName, hasWineIdentity } from "../shared/wine-identity.ts";
 import { additionReceiptStatement, getAdditionReceipt } from "./addition-receipts.ts";
 import { requireSitePermission } from "./api/auth.ts";
@@ -33,40 +40,6 @@ import {
   type OperationStatement,
 } from "./operation-transaction.ts";
 
-const wineInputSchema = z.object({
-  wineryName: z.string().trim().max(160),
-  brandName: z.string().trim().max(160).optional(),
-  baseName: z.string().trim().max(180).optional(),
-  designation: z.string().trim().max(160).nullable().optional(),
-  displayName: z.string().trim().max(180).optional(),
-  vintageYear: z.number().int().min(1800).max(2200).nullable().optional(),
-  vintageStatus: z.enum(["year", "non_vintage", "unknown"]).optional(),
-  grapeVarieties: z.array(z.string().trim().min(1).max(120)).max(24).optional(),
-  country: z.string().trim().max(120).optional(),
-  region: z.string().trim().max(160).optional(),
-  appellation: z.string().trim().max(160).optional(),
-  classification: z.string().trim().max(160).optional(),
-  wineType: z.string().trim().max(120).optional(),
-  wineColor: z.string().trim().max(40).optional(),
-  addressQualification: z.string().trim().max(500).optional(),
-  alcoholPercent: z.number().min(0).max(100).optional(),
-  drinkFromYear: z.number().int().min(1800).max(2200).optional(),
-  drinkToYear: z.number().int().min(1800).max(2200).optional(),
-  description: z.string().trim().max(2_000).optional(),
-  drinkingAdvice: z.string().trim().max(2_000).optional(),
-  labelText: z.string().trim().max(4_000).optional(),
-  sourceUrl: z.url().trim().max(500).optional().or(z.literal("")),
-  notes: z.string().trim().max(2_000).optional(),
-});
-
-const bottleInputSchema = z.object({
-  bottleNumber: z.string().trim().max(80).optional(),
-  volumeMl: z.number().int().min(1).max(30_000).optional(),
-  barcode: z.string().trim().max(80).optional(),
-  lotCode: z.string().trim().max(120).optional(),
-  notes: z.string().trim().max(2_000).optional(),
-});
-
 const wineAwardInputSchema = z.object({
   id: z.string().trim().min(1).max(120).optional(),
   awardName: z.string().trim().min(1).max(180),
@@ -82,12 +55,12 @@ const wineAwardInputSchema = z.object({
 
 export const createBottleSchema = z.object({
   operationId: additionOperationIdSchema,
-  siteId: z.string().trim().min(1),
-  storageLocationId: z.string().trim().min(1).nullable().optional(),
+  siteId: entityIdSchema,
+  storageLocationId: entityIdSchema.nullable().optional(),
   positionHint: z.string().trim().max(120).optional(),
-  quantity: z.number().int().min(1).max(24).default(1),
+  quantity: bottleQuantitySchema.default(1),
   wine: wineInputSchema.optional(),
-  wineVintageId: z.string().trim().min(1).optional(),
+  wineVintageId: entityIdSchema.optional(),
   allowUnidentified: z.boolean().optional(),
   bottle: bottleInputSchema.default({}),
   labelExtraction: z
@@ -102,35 +75,15 @@ export const createBottleSchema = z.object({
   awards: z.array(wineAwardInputSchema).max(24).optional(),
 });
 
-const patchWineSchema = wineInputSchema.partial().extend({
-  brandName: wineInputSchema.shape.brandName.nullable(),
-  vintageYear: wineInputSchema.shape.vintageYear.nullable(),
-  country: wineInputSchema.shape.country.nullable(),
-  region: wineInputSchema.shape.region.nullable(),
-  appellation: wineInputSchema.shape.appellation.nullable(),
-  classification: wineInputSchema.shape.classification.nullable(),
-  wineType: wineInputSchema.shape.wineType.nullable(),
-  wineColor: wineInputSchema.shape.wineColor.nullable(),
-  addressQualification: wineInputSchema.shape.addressQualification.nullable(),
-  alcoholPercent: wineInputSchema.shape.alcoholPercent.nullable(),
-  drinkFromYear: wineInputSchema.shape.drinkFromYear.nullable(),
-  drinkToYear: wineInputSchema.shape.drinkToYear.nullable(),
-  description: wineInputSchema.shape.description.nullable(),
-  drinkingAdvice: wineInputSchema.shape.drinkingAdvice.nullable(),
-  labelText: wineInputSchema.shape.labelText.nullable(),
-  sourceUrl: wineInputSchema.shape.sourceUrl.nullable(),
-  notes: wineInputSchema.shape.notes.nullable(),
-});
-
 export const patchBottleSchema = z.object({
   status: z.enum(["in_stock", "consumed"]).optional(),
-  storageLocationId: z.string().trim().min(1).nullable().optional(),
+  storageLocationId: entityIdSchema.nullable().optional(),
   positionHint: z.string().trim().max(120).optional(),
   bottle: bottleInputSchema.optional(),
-  wine: patchWineSchema.optional(),
-  wineVintageId: z.string().trim().min(1).optional(),
+  wine: winePatchInputSchema.optional(),
+  wineVintageId: entityIdSchema.optional(),
   wineEditScope: z.enum(["shared", "bottle"]).optional(),
-  expectedWineVintageId: z.string().trim().min(1).optional(),
+  expectedWineVintageId: entityIdSchema.optional(),
   expectedAffectedBottleCount: z.number().int().min(1).optional(),
   allowUnidentified: z.boolean().optional(),
   labelExtraction: createBottleSchema.shape.labelExtraction,
@@ -172,8 +125,9 @@ export type BottleOperationResult = {
 
 export async function addBottles(
   context: OperationContext,
-  payload: z.infer<typeof createBottleSchema>,
+  input: z.infer<typeof createBottleSchema>,
 ): Promise<z.infer<typeof bottleAdditionResultSchema>> {
+  const payload = createBottleSchema.parse(input);
   const { database, userId } = context;
   const { siteId } = payload;
   await requireSitePermission({ ...context, siteId, permission: "site.content.write" });
@@ -277,8 +231,9 @@ export async function addBottles(
 export async function editBottle(
   context: OperationContext,
   bottleId: string,
-  payload: z.infer<typeof patchBottleSchema>,
+  input: z.infer<typeof patchBottleSchema>,
 ): Promise<BottleOperationResult> {
+  const payload = patchBottleSchema.parse(input);
   return commitBottleEdit(context, bottleId, payload, "cellar.edit_bottle");
 }
 

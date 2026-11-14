@@ -1,7 +1,6 @@
 import {
   awardInputsForItem,
   criticReviewInputsForItem,
-  parseGrapeVarieties,
   validateAwards,
   validateCriticReviews,
 } from "./bottle-metadata.ts";
@@ -25,7 +24,9 @@ function formPayload({ awards, criticReviews, form }: BottleModalSubmit) {
       designation: form.designation,
       vintageStatus: form.vintageStatus,
       vintageYear: form.vintageStatus === "year" ? parseOptionalYear(form.vintageYear) : null,
-      grapeVarieties: parseGrapeVarieties(form.grapeVarieties),
+      grapeVarieties: form.grapeVarieties
+        .map((value) => value.trim())
+        .filter((value) => value !== ""),
       country: form.country,
       region: form.region,
       appellation: form.appellation,

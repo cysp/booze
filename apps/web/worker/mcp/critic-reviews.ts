@@ -1,4 +1,10 @@
-import type { createD1Client } from "@chikachow/booze-db";
+import {
+  criticReviews,
+  reviewSources,
+  siteMemberships,
+  type createD1Client,
+} from "@chikachow/booze-db";
+import { and, eq, isNull, or } from "drizzle-orm";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -13,7 +19,6 @@ import {
   type ReviewSourceResource,
 } from "../api/critic-reviews.ts";
 import { resolveWineVintageId } from "./catalogue.ts";
-import { mcpEntityId } from "./ids.ts";
 import {
   decodePageCursor,
   pageFromRows,
@@ -278,10 +283,17 @@ export async function resolveReviewSourceId({
   readonly reviewSourceId: string;
   readonly userId: string;
 }): Promise<string> {
-  const sources = await listReviewSources({ database, userId });
-  const source = sources.find(
-    (candidate) => mcpEntityId("review_source", candidate.id) === reviewSourceId,
-  );
+  const [source] = await database
+    .select({ id: reviewSources.id })
+    .from(reviewSources)
+    .leftJoin(siteMemberships, eq(reviewSources.siteId, siteMemberships.siteId))
+    .where(
+      and(
+        eq(reviewSources.id, reviewSourceId),
+        or(isNull(reviewSources.siteId), eq(siteMemberships.userId, userId)),
+      ),
+    )
+    .limit(1);
   if (source === undefined) {
     throw new HTTPException(404, { message: "Review source not found" });
   }
@@ -297,10 +309,12 @@ export async function resolveCriticReviewId({
   readonly database: ReturnType<typeof createD1Client>;
   readonly userId: string;
 }): Promise<string> {
-  const reviews = await listCriticReviews({ database, userId });
-  const review = reviews.find(
-    (candidate) => mcpEntityId("critic_review", candidate.id) === criticReviewId,
-  );
+  const [review] = await database
+    .select({ id: criticReviews.id })
+    .from(criticReviews)
+    .innerJoin(siteMemberships, eq(criticReviews.siteId, siteMemberships.siteId))
+    .where(and(eq(criticReviews.id, criticReviewId), eq(siteMemberships.userId, userId)))
+    .limit(1);
   if (review === undefined) {
     throw new HTTPException(404, { message: "Critic review not found" });
   }
@@ -314,7 +328,7 @@ export function reviewSourceSummary(
     isActive: source.isActive,
     notes: source.notes,
     reviewSource: source.name,
-    reviewSourceId: mcpEntityId("review_source", source.id),
+    reviewSourceId: source.id,
     site: source.siteName,
     siteId: source.siteId,
     sourceType: source.sourceType,
@@ -326,17 +340,17 @@ export function criticReviewSummary(
   review: CriticReviewFact,
 ): z.infer<typeof criticReviewSummarySchema> {
   return {
-    criticReviewId: mcpEntityId("critic_review", review.id),
+    criticReviewId: review.id,
     notes: review.notes,
     provenance: review.provenance,
     ratingScale: review.ratingScale,
     ratingText: review.ratingText,
     ratingValue: review.ratingValue,
     reviewSource: review.reviewSourceName,
-    reviewSourceId: mcpEntityId("review_source", review.reviewSourceId),
+    reviewSourceId: review.reviewSourceId,
     reviewedAt: review.reviewedAt,
     siteId: review.siteId,
     sourceUrl: review.sourceUrl,
-    wineId: mcpEntityId("wine", review.wineVintageId),
+    wineId: review.wineVintageId,
   };
 }

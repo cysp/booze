@@ -5,7 +5,7 @@ import type { createD1Client } from "@chikachow/booze-db";
 import { consumeBottle, moveBottle } from "../catalogue-operations.ts";
 import { createStorageLocation } from "../location-operations.ts";
 import { setDrinkingWindow } from "../wine-operations.ts";
-import { assertCanReadStorageLocation, getBottle, withDrinkStatus } from "../api/inventory.ts";
+import { getBottle, withDrinkStatus } from "../api/inventory.ts";
 import {
   bottleDetail,
   listBottleSummaries,
@@ -166,7 +166,7 @@ export function createBoozeMcpServer({
     {
       annotations: readOnlyClosedWorldToolAnnotations,
       title: "Get wine",
-      description: "Fetch one authorised wine vintage by MCP wine ID.",
+      description: "Fetch one authorised wine vintage by its canonical stored wine vintage ID.",
       inputSchema: getWineInputSchema,
       outputSchema: {
         wine: wineVintageSummarySchema,
@@ -277,7 +277,6 @@ export function createBoozeMcpServer({
     },
     async ({ locationId, ...input }) => {
       const storageLocationId = await resolveStorageLocationId({ database, locationId, userId });
-      await assertCanReadStorageLocation({ database, storageLocationId, userId });
       const page = await listLocationBottleSummaries({
         database,
         input: { locationId, ...input },

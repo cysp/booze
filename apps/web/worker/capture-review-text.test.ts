@@ -142,7 +142,7 @@ await it("preserves accepted OCR text through later separate-wine and shared cor
       "INSERT INTO bottles (id,site_id,wine_vintage_id) VALUES ('one','site','wine'),('two','site','wine')",
     );
     const item = inventoryItemFixture({
-      bottleId: "one",
+      id: "one",
       siteId: "site",
       wineVintageId: "wine",
       wineryId: "winery",
@@ -150,7 +150,7 @@ await it("preserves accepted OCR text through later separate-wine and shared cor
       addressQualification,
       wineType,
       wineBottleCount: 2,
-      locationId: null,
+      storageLocationId: null,
       vintageYear: null,
       vintageStatus: "unknown",
     });

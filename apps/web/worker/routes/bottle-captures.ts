@@ -4,6 +4,7 @@ import { createD1Client } from "@chikachow/booze-db";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { captureReviewCandidateSchema, isIdentifiedCapture } from "../../shared/capture-review.ts";
+import { candidateValidationIssueSchema } from "../../shared/catalogue-inputs.ts";
 import { additionOperationIdSchema } from "../../shared/addition-operation.ts";
 import { validateBottleQuantity } from "../../shared/quantity.ts";
 import { z } from "zod";
@@ -310,6 +311,23 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       });
     }
     const source = capture.reviewCandidate ?? capture.latestRun?.importCandidate;
+    const extractionIssues = z
+      .object({ validationIssues: z.array(candidateValidationIssueSchema).optional() })
+      .safeParse(capture.latestRun?.importCandidate);
+    const unresolved = (
+      extractionIssues.success ? (extractionIssues.data.validationIssues ?? []) : []
+    ).filter((issue) => {
+      if (payload.wineVintageId !== undefined && issue.path.startsWith("wine.")) return false;
+      return (
+        capture.reviewCandidate === null ||
+        (issue.path === "bottle.volumeMl" && capture.reviewCandidate.bottle.volumeMl === undefined)
+      );
+    });
+    if (unresolved.length > 0) {
+      throw new HTTPException(400, {
+        message: `${unresolved.map((issue) => `${issue.path}: ${issue.message} Label value: ${JSON.stringify(issue.rawValue)}.`).join(" ")} Save corrected details before importing this capture.`,
+      });
+    }
     // Reusing a selected wine does not apply OCR wine metadata. Validate only
     // the physical bottle facts, so conflicting OCR wine facts cannot block it.
     const reviewed =

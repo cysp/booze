@@ -15,7 +15,7 @@ import {
 import { useForm, type Control, type UseFormSetValue, type UseFormWatch } from "react-hook-form";
 
 import { formatWineLabel, hasWineIdentity } from "../shared/wine-identity.ts";
-import { parseGrapeVarieties } from "./bottle-metadata.ts";
+import { GrapeVarietiesInput } from "./GrapeVarietiesInput.tsx";
 import { parseOptionalYear } from "./inventory-model.ts";
 import { BottleLocationPicker } from "./BottleLocationPicker.tsx";
 import { AwardFields, CriticReviewFields } from "./BottleMetadataFields.tsx";
@@ -82,11 +82,6 @@ const identityFields = [
     placeholder: "Pinnacle Series",
     description:
       "A separate name, range, vineyard or designation printed on the label, if present.",
-  },
-  {
-    label: "Grape varieties",
-    name: "grapeVarieties",
-    placeholder: "Shiraz, Cabernet Sauvignon",
   },
 ] satisfies readonly FormFieldConfig[];
 
@@ -465,7 +460,7 @@ function wineFactsForForm(values: FormState) {
     wineryName: values.wineryName,
     brandName: values.brandName,
     designation: values.designation,
-    grapeVarieties: parseGrapeVarieties(values.grapeVarieties),
+    grapeVarieties: values.grapeVarieties,
     appellation: values.appellation,
     vintageYear: parseOptionalYear(values.vintageYear),
     vintageStatus: values.vintageStatus,
@@ -623,6 +618,14 @@ function BottleFields({
         <fieldset className="form-stack bottle-form-fields" disabled={!wineEditable}>
           <FormSection title="Wine identity">
             <FieldGrid control={control} fields={identityFields} disabled={!wineEditable} />
+            <GrapeVarietiesInput
+              disabled={!wineEditable}
+              name="grapeVarieties"
+              value={watch("grapeVarieties")}
+              onChange={(value) => {
+                setValue("grapeVarieties", value, { shouldDirty: true, shouldTouch: true });
+              }}
+            />
             <Selector
               label="Vintage status"
               value={vintageStatus}

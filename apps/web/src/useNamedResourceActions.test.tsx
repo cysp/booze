@@ -80,6 +80,36 @@ describe("useNamedResourceActions", () => {
     expect(result.current.editor).toBeNull();
   });
 
+  it.each(["location", "site"] as const)(
+    "encodes the full opaque %s ID for rename and delete",
+    async (kind) => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const { result } = setup(kind);
+      const id = "legacy # / ? % ID";
+      act(() => {
+        result.current.beginRename(id, "Renamed");
+      });
+      await act(async () => {
+        await result.current.saveRename();
+      });
+      await act(async () => {
+        await result.current.remove(id);
+      });
+      const collection = kind === "site" ? "sites" : "storage-locations";
+      expect(fetchMock.mock.calls).toEqual([
+        [
+          `/api/${collection}/legacy%20%23%20%2F%20%3F%20%25%20ID`,
+          expect.objectContaining({ method: "PATCH" }),
+        ],
+        [
+          `/api/${collection}/legacy%20%23%20%2F%20%3F%20%25%20ID`,
+          expect.objectContaining({ method: "DELETE" }),
+        ],
+      ]);
+    },
+  );
+
   it("retains the editor after validation and HTTP failures", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);

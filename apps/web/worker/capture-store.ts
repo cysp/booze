@@ -12,57 +12,20 @@ import {
 import { and, desc, eq, ne, sql, type SQL } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 
-import {
-  captureReviewCandidateSchema,
-  type CaptureReviewCandidate,
-} from "../shared/capture-review.ts";
+import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
+import { captureReviewCandidateResourceSchema } from "../shared/catalogue-resources.ts";
 import { isCaptureStatus, type CaptureStatus } from "./capture-state.ts";
 
-export type CaptureImageResource = {
-  readonly imageAssetId: string;
-  readonly originalFilename: string | null;
-  readonly sortOrder: number;
-  readonly contentType: string;
-  readonly sizeBytes: number;
-  readonly imageUrl: string;
-};
-
-export type CaptureRunResource = {
-  readonly id: string;
-  readonly status: string;
-  readonly extractionR2Key: string | null;
-  readonly extractionContentType: string | null;
-  readonly extractionSizeBytes: number | null;
-  readonly importCandidate: unknown;
-  readonly matchResult: unknown;
-  readonly importResult: unknown;
-  readonly errorMessage: string | null;
-  readonly errorDetailR2Key: string | null;
-  readonly errorDetailContentType: string | null;
-  readonly errorDetailSizeBytes: number | null;
-  readonly createdAt: string;
-  readonly completedAt: string | null;
-};
-
-export type CaptureResource = {
-  readonly id: string;
-  readonly siteId: string;
-  readonly siteName: string;
-  readonly storageLocationId: string | null;
-  readonly storageLocationName: string | null;
-  readonly positionHint: string | null;
-  readonly quantity: number;
-  readonly status: CaptureStatus;
-  readonly workflowInstanceId: string | null;
-  readonly reviewCandidate: CaptureReviewCandidate | null;
-  readonly reviewRevision: number;
-  readonly importedBottleIds: readonly string[];
-  readonly errorMessage: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly images: readonly CaptureImageResource[];
-  readonly latestRun: CaptureRunResource | null;
-};
+import type {
+  CaptureImageResource,
+  CaptureRunResource,
+  CaptureResource,
+} from "../shared/catalogue-resources.ts";
+export type {
+  CaptureImageResource,
+  CaptureRunResource,
+  CaptureResource,
+} from "../shared/catalogue-resources.ts";
 
 export type CaptureWorkflowRecord = {
   readonly id: string;
@@ -136,7 +99,7 @@ export async function listBottleCaptures({
     reviewCandidate:
       row.reviewCandidateJson === null
         ? null
-        : captureReviewCandidateSchema.parse(parseJson(row.reviewCandidateJson)),
+        : captureReviewCandidateResourceSchema.parse(parseJson(row.reviewCandidateJson)),
     images: imagesByCapture.get(row.id) ?? [],
     latestRun: runsByCapture.get(row.id) ?? null,
   }));
@@ -573,7 +536,7 @@ async function listCaptureImages({
     const images = imagesByCapture.get(rowCaptureId) ?? [];
     images.push({
       ...image,
-      imageUrl: `/api/bottle-captures/${rowCaptureId}/images/${image.imageAssetId}`,
+      imageUrl: `/api/bottle-captures/${encodeURIComponent(rowCaptureId)}/images/${encodeURIComponent(image.imageAssetId)}`,
     });
     imagesByCapture.set(rowCaptureId, images);
   }

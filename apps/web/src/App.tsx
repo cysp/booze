@@ -10,7 +10,6 @@ import { lazy, Suspense, useEffect, useMemo, type ReactElement } from "react";
 
 // oxlint-disable-next-line import/no-unassigned-import -- Vite loads the application stylesheet for its side effect.
 import "./App.css";
-import { parseGrapeVarieties } from "./bottle-metadata.ts";
 import { InventoryArea } from "./InventoryView.tsx";
 import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
 import { useCatalogue } from "./useCatalogue.ts";
@@ -23,11 +22,11 @@ import {
   useSiteController,
 } from "./useCatalogueControllers.ts";
 import {
-  awardSummary,
-  criticReviewSummary,
+  filterInventoryItems,
+  inventoryLocationOptions,
+  siteLabel,
   drinkLabel,
   isDrinkQueueItem,
-  storageLocationPath,
   type AuthMode,
   type InventoryItem,
 } from "./inventory-model.ts";
@@ -100,10 +99,6 @@ export function App({ authMode }: AppProps): ReactElement {
   );
 }
 
-function grapeVarieties(item: InventoryItem): readonly string[] {
-  return item.grapeVarieties === null ? [] : parseGrapeVarieties(item.grapeVarieties);
-}
-
 function uniqueSorted(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value !== ""))].toSorted((left, right) =>
     left.localeCompare(right),
@@ -134,7 +129,7 @@ export function Catalogue({
     [sites],
   );
   const writableSiteIds = useMemo(
-    () => new Set(writableSites.map((site) => site.siteId)),
+    () => new Set(writableSites.map((site) => site.id)),
     [writableSites],
   );
   const writableLocations = useMemo(
@@ -146,13 +141,15 @@ export function Catalogue({
     drinkStatusFilter,
     filter,
     grouping,
-    locationFilter,
+    storageLocationIdFilter,
+    siteIdFilter,
     varietalFilter,
     setArea,
     setDrinkStatusFilter,
     setFilter,
     setGrouping,
-    setLocationFilter,
+    setStorageLocationIdFilter,
+    setSiteIdFilter,
     setVarietalFilter,
   } = useCatalogueUrlState();
   const bottleController = useBottleController({
@@ -187,55 +184,36 @@ export function Catalogue({
     (bottleController.editingBottle !== null && bottleController.editingForm !== null);
   const captureBottleDialogTrigger = useReturnFocus(isBottleDialogOpen, "#add-bottle-trigger");
 
-  const listedItems = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    return items.filter(
-      (item) =>
-        (needle === "" ||
-          [
-            item.site,
-            storageLocationPath(item, locations),
-            item.position,
-            item.wineryName,
-            item.brandName,
-            item.displayName,
-            item.vintageLabel,
-            item.vintageYear?.toString() ?? null,
-            item.grapeVarieties,
-            item.country,
-            item.region,
-            item.appellation,
-            item.classification,
-            item.wineType,
-            item.wineColor,
-            item.alcoholPercent,
-            item.bottleVolumeMl,
-            item.addressQualification,
-            item.barcode,
-            item.lotCode,
-            item.description,
-            item.drinkingAdvice,
-            item.labelText,
-            item.wineNotes,
-            item.bottleNotes,
-            criticReviewSummary(item),
-            awardSummary(item),
-          ]
-            .filter((value) => value !== null)
-            .some((value) => value.toLowerCase().includes(needle))) &&
-        (varietalFilter === "" || grapeVarieties(item).includes(varietalFilter)) &&
-        (locationFilter === "" || storageLocationPath(item, locations) === locationFilter) &&
-        (drinkStatusFilter === "" || item.drinkStatus === drinkStatusFilter),
-    );
-  }, [drinkStatusFilter, filter, items, locationFilter, locations, varietalFilter]);
-
+  const listedItems = useMemo(
+    () =>
+      filterInventoryItems(items, locations, {
+        filter,
+        varietalFilter,
+        storageLocationIdFilter,
+        siteIdFilter,
+        drinkStatusFilter,
+      }),
+    [
+      drinkStatusFilter,
+      filter,
+      items,
+      storageLocationIdFilter,
+      siteIdFilter,
+      locations,
+      varietalFilter,
+    ],
+  );
   const varietalOptions = useMemo(
-    () => uniqueSorted(items.flatMap((item) => grapeVarieties(item))),
+    () => uniqueSorted(items.flatMap((item) => item.grapeVarieties)),
     [items],
   );
   const locationOptions = useMemo(
-    () => uniqueSorted(items.map((item) => storageLocationPath(item, locations))),
-    [items, locations],
+    () => inventoryLocationOptions(items, locations, sites),
+    [items, locations, sites],
+  );
+  const siteOptions = useMemo(
+    () => sites.map((site) => ({ label: siteLabel(site, sites), value: site.id })),
+    [sites],
   );
   const drinkStatusOptions = useMemo(
     () =>
@@ -352,15 +330,18 @@ export function Catalogue({
                     : undefined
                 }
                 editableSiteIds={writableSiteIds}
-                locationFilter={locationFilter}
+                storageLocationIdFilter={storageLocationIdFilter}
                 locationOptions={locationOptions}
+                siteIdFilter={siteIdFilter}
+                siteOptions={siteOptions}
+                setSiteIdFilter={setSiteIdFilter}
                 locations={locations}
                 varietalFilter={varietalFilter}
                 varietalOptions={varietalOptions}
                 setDrinkStatusFilter={setDrinkStatusFilter}
                 setFilter={setFilter}
                 setGrouping={setGrouping}
-                setLocationFilter={setLocationFilter}
+                setStorageLocationIdFilter={setStorageLocationIdFilter}
                 setVarietalFilter={setVarietalFilter}
                 onAddBottle={() => {
                   captureBottleDialogTrigger();
@@ -419,7 +400,7 @@ export function Catalogue({
             bottleController.editingForm === null ? null : (
               <BottleModal
                 wines={wines}
-                key={bottleController.editingBottle.bottleId}
+                key={bottleController.editingBottle.id}
                 form={bottleController.editingForm}
                 isSaving={bottleController.isSaving}
                 item={bottleController.editingBottle}
@@ -430,13 +411,11 @@ export function Catalogue({
                   bottleController.setEditingBottle(null);
                 }}
                 onDelete={async () => {
-                  return bottleController.deleteBottle(
-                    bottleController.editingBottle?.bottleId ?? "",
-                  );
+                  return bottleController.deleteBottle(bottleController.editingBottle?.id ?? "");
                 }}
                 onMarkConsumed={async () => {
                   const updated = await bottleController.updateBottle({
-                    bottleId: bottleController.editingBottle?.bottleId ?? "",
+                    bottleId: bottleController.editingBottle?.id ?? "",
                     payload: { status: "consumed" },
                   });
                   if (updated) {

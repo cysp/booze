@@ -21,7 +21,7 @@ const sharedGuard = {
 
 describe("bottle edit payload", () => {
   it("preserves the position note when moving to another location", () => {
-    const item = inventoryItemFixture({ position: "Row 2" });
+    const item = inventoryItemFixture({ positionHint: "Row 2" });
     const submission = submissionFor(item);
     submission.form.storageLocationId = "location-top";
     expect(serialized(bottleEditPayload(submission, item))).toEqual({
@@ -133,7 +133,7 @@ describe("bottle creation payload", () => {
       form: {
         ...initialFormState,
         wineryName: "RIKARD",
-        grapeVarieties: "Shiraz",
+        grapeVarieties: ["Shiraz"],
         vintageStatus: "year",
         vintageYear: "2022",
       },

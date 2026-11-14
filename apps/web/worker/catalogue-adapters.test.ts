@@ -10,7 +10,6 @@ import { userIdForClerkUser } from "./api/ids.ts";
 import { problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
-import { mcpEntityId } from "./mcp/ids.ts";
 import { createBoozeMcpServer } from "./mcp/server.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
 import { storageLocationRoutes } from "./routes/storage-locations.ts";
@@ -107,7 +106,7 @@ await it("HTTP and MCP preserve consumed location history and reject subsequent 
   );
   const move = await fixture.client.callTool({
     name: "cellar.set_bottle_location",
-    arguments: { bottleId: "bottle", storageLocationId: mcpEntityId("location", "right") },
+    arguments: { bottleId: "bottle", storageLocationId: "right" },
   });
   assert.equal(move.isError, true);
   assert.equal(
@@ -168,7 +167,7 @@ await it("HTTP and MCP reuse the same exact location and both reject a type-chan
 await it("MCP drinking-window writes return compact committed facts and audit no-ops", async (context) => {
   const fixture = await setup();
   context.after(fixture.close);
-  const args = { wineId: mcpEntityId("wine", "wine"), drinkFromYear: 2025, drinkToYear: 2030 };
+  const args = { wineId: "wine", drinkFromYear: 2025, drinkToYear: 2030 };
   const first = await fixture.client.callTool({
     name: "cellar.set_drinking_window",
     arguments: args,

@@ -18,8 +18,8 @@ describe("LocationCreateForm", () => {
         form={{
           ...initialLocationFormState,
           location: "Left rack",
-          site: sitesFixture[0]?.site ?? "",
-          siteId: sitesFixture[0]?.siteId ?? "",
+          site: sitesFixture[0]?.name ?? "",
+          siteId: sitesFixture[0]?.id ?? "",
         }}
         locations={[]}
         sites={sitesFixture}
