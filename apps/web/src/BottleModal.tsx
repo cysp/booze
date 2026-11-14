@@ -52,7 +52,7 @@ type BottleModalProps = {
   readonly locations: readonly LocationItem[];
   readonly sites: readonly SiteItem[];
   readonly title: string;
-  readonly onClose: () => void;
+  readonly onClose: (siteId: string) => void;
   readonly onDelete?: () => Promise<boolean>;
   readonly onMarkConsumed?: () => Promise<boolean>;
   readonly onSubmit: (input: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
@@ -272,7 +272,7 @@ export function BottleModal({
     if (hasUnsavedChanges) {
       setIsDiscardOpen(true);
     } else {
-      onClose();
+      onClose(currentValues.siteId);
     }
   }
 
@@ -401,7 +401,9 @@ export function BottleModal({
         title="Discard unsaved changes?"
         onAction={async () => true}
         onOpenChange={setIsDiscardOpen}
-        onSuccess={onClose}
+        onSuccess={() => {
+          onClose(currentValues.siteId);
+        }}
       />
       {onDelete === undefined ? null : (
         <DestructiveActionDialog
@@ -422,7 +424,9 @@ export function BottleModal({
             }
           }}
           onOpenChange={setIsDeleteOpen}
-          onSuccess={onClose}
+          onSuccess={() => {
+            onClose(currentValues.siteId);
+          }}
         />
       )}
     </>

@@ -245,15 +245,50 @@ function verifyWineUpgrade(base: MigrationFiles, candidate: MigrationFiles) {
       INSERT INTO grape_varieties (id, name) VALUES ('shiraz', 'Shiraz');
       INSERT INTO wine_constituents (site_id, wine_vintage_id, grape_variety_id, percentage, blend_text)
         VALUES ('migration-site', 'known', 'shiraz', 100, 'Original blend');
-      INSERT INTO label_extractions (id, bottle_id, wine_vintage_id, extracted_fields_json)
-        VALUES ('evidence', 'bottle-known', 'known', '{"label":"RIKARD 2022 SHIRAZ"}');`,
+      INSERT INTO storage_locations (id, site_id, name) VALUES ('migration-rack', 'migration-site', 'Legacy rack');
+      INSERT INTO image_assets (id, site_id, sha256, r2_key, content_type, size_bytes,
+        thumbnail_r2_key, thumbnail_content_type, thumbnail_size_bytes, thumbnail_width, thumbnail_height,
+        width, height, uploaded_by_user_id)
+        VALUES ('shared-image', 'migration-site', 'legacy-image-digest', 'legacy/original.heic', 'image/heic', 812345,
+          'legacy/thumbnail.webp', 'image/webp', 4567, 240, 180, 4032, 3024, 'migration-user');
+      INSERT INTO bottle_captures (id, site_id, user_id, storage_location_id, position_hint, quantity,
+        status, workflow_instance_id, imported_bottle_ids_json, error_message, error_detail_json)
+        VALUES ('legacy-imported', 'migration-site', 'migration-user', 'migration-rack', 'Upper left', 1,
+          'imported', 'legacy-workflow', '["bottle-known"]', NULL, NULL),
+          ('legacy-review', 'migration-site', 'migration-user', NULL, 'In box', 2,
+          'needs_review', 'legacy-review-workflow', NULL, 'Check original label', '{"reason":"uncertain year"}');
+      ${identityAlreadyApplied ? `UPDATE bottle_captures SET review_candidate_json = '{"wine":{"wineryName":"RIKARD","designation":"Shiraz","vintageYear":2022},"bottle":{}}', review_revision = 3 WHERE id = 'legacy-review';` : ""}
+      INSERT INTO bottle_capture_images (capture_id, image_asset_id, sort_order, original_filename)
+        VALUES ('legacy-imported', 'shared-image', 0, 'Front label.HEIC'),
+          ('legacy-review', 'shared-image', 0, 'Retained review original.HEIC');
+      INSERT INTO bottle_capture_runs (id, capture_id, status, import_candidate_json, match_result_json, import_result_json,
+        extractor_version, model, prompt_version, schema_version, attempt_number,
+        extraction_r2_key, extraction_content_type, extraction_size_bytes,
+        error_detail_r2_key, error_detail_content_type, error_detail_size_bytes, completed_at)
+        VALUES ('legacy-import-run', 'legacy-imported', 'imported', '{"wine":{"wineryName":"RIKARD"},"bottle":{}}',
+          '{"wineVintageCandidates":[{"id":"known"}]}', '{"bottleIds":["bottle-known"],"wineVintageId":"known"}',
+          'legacy-extractor', 'legacy-model', 'legacy-prompt', 'legacy-schema', 2,
+          'legacy/extraction.json', 'application/json', 2345, NULL, NULL, NULL, '2026-09-01T00:00:00Z'),
+          ('legacy-review-run', 'legacy-review', 'needs_review', '{"wine":{"wineryName":"RIKARD"},"bottle":{}}', NULL, NULL,
+          'legacy-extractor', 'legacy-model', 'legacy-prompt', 'legacy-schema', 1,
+          'legacy/review-extraction.json', 'application/json', 3456,
+          'legacy/review-error.json', 'application/json', 678, '2026-09-02T00:00:00Z');
+      INSERT INTO label_extractions (id, bottle_id, wine_vintage_id, capture_id, capture_run_id, extracted_fields_json)
+        VALUES ('evidence', 'bottle-known', 'known', 'legacy-imported', 'legacy-import-run', '{"label":"RIKARD 2022 SHIRAZ"}');`,
     retainedRows: `SELECT id, clerk_user_id FROM users ORDER BY id;
       SELECT id, name FROM sites ORDER BY id;
       SELECT site_id, user_id, role FROM site_memberships ORDER BY site_id, user_id;
       SELECT id, site_id, winery_id, base_name, display_name, vintage_year, notes FROM wine_vintages ORDER BY id;
       SELECT * FROM bottles ORDER BY id;
       SELECT * FROM wine_constituents ORDER BY wine_vintage_id;
-      SELECT * FROM label_extractions ORDER BY id;`,
+      SELECT * FROM label_extractions ORDER BY id;
+      SELECT * FROM image_assets ORDER BY id;
+      SELECT * FROM bottle_capture_images ORDER BY capture_id, sort_order;
+      SELECT * FROM bottle_capture_runs ORDER BY id;
+      SELECT id, site_id, user_id, storage_location_id, position_hint, quantity, status,
+        workflow_instance_id, imported_bottle_ids_json, error_message, error_detail_json, created_at, updated_at
+        FROM bottle_captures ORDER BY id;
+      ${identityAlreadyApplied ? "SELECT id, review_candidate_json, review_revision FROM bottle_captures ORDER BY id;" : ""}`,
     afterUpgradeChecks: [
       {
         sql: "SELECT id, vintage_status, vintage_label FROM wine_vintages ORDER BY id",

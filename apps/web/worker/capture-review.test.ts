@@ -149,8 +149,6 @@ await describe("capture review corrections", async () => {
       runId: "run",
       siteId: "site",
       quantity: 2,
-      storageLocationId: null,
-      positionHint: null,
       candidate: {
         wine: { wineryName: "Producer", designation: "Reserve" },
         bottle: {},

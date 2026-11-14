@@ -48,6 +48,8 @@ function captureElement({
   onImport = resolvedImport,
   onSaveReview = resolvedReview,
   onRetry = resolvedTrue,
+  onSubmit = resolvedCapture,
+  onCancelAddition,
 }: {
   readonly captures?: readonly CaptureResource[];
   readonly wines?: readonly WineOption[];
@@ -55,6 +57,11 @@ function captureElement({
   readonly onImport?: CaptureImportAction;
   readonly onSaveReview?: CaptureReviewSaveAction;
   readonly onRetry?: (captureId: string) => Promise<boolean>;
+  readonly onSubmit?: (
+    form: CaptureFormState,
+    files: readonly File[],
+  ) => Promise<CaptureSubmitResult>;
+  readonly onCancelAddition?: (siteId: string) => void;
 } = {}) {
   return (
     <CaptureArea
@@ -69,7 +76,8 @@ function captureElement({
       onImport={onImport}
       onSaveReview={onSaveReview}
       onRetry={onRetry}
-      onSubmit={resolvedCapture}
+      onSubmit={onSubmit}
+      {...(onCancelAddition === undefined ? {} : { onCancelAddition })}
       setForm={vi.fn((nextForm: CaptureFormState): void => {
         void nextForm;
       })}
@@ -572,4 +580,20 @@ it("keeps a dirty capture mounted when a new upload pushes it beyond the visible
   await user.click(screen.getByRole("button", { name: "Show 50 more" }));
   expect(screen.getByText("Showing 101 of 151 captures")).toBeVisible();
   expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
+});
+
+it("retains incomplete submission photos and exposes deliberate start-another intent for the current site", async () => {
+  const user = userEvent.setup();
+  const onCancelAddition = vi.fn<(siteId: string) => void>();
+  const onSubmit = vi.fn(async (): Promise<CaptureSubmitResult> => ({
+    kind: "pending",
+    message: "Capture saved; image upload is incomplete.",
+  }));
+  renderCapture({ onSubmit, onCancelAddition });
+  await user.upload(screen.getByLabelText(/Bottle photos/u), photo("label.jpg"));
+  await user.click(screen.getByRole("button", { name: "Submit capture" }));
+  expect(screen.getByText(/1 of 4 selected/u)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Start another capture" }));
+  expect(onCancelAddition).toHaveBeenCalledExactlyOnceWith("site-owner");
+  expect(screen.getByText(/1 of 4 selected/u)).toBeVisible();
 });

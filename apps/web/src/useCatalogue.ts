@@ -381,6 +381,9 @@ async function loadCollection<Resource>({
 
 function isPendingCapture(capture: CaptureResource): boolean {
   return (
-    capture.status === "queued" || capture.status === "extracting" || capture.status === "importing"
+    capture.status === "uploading" ||
+    capture.status === "queued" ||
+    capture.status === "extracting" ||
+    capture.status === "importing"
   );
 }

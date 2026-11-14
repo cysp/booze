@@ -19,6 +19,14 @@ export async function deleteBottleCaptureData({
     WHERE id = ? AND status NOT IN ('queued', 'extracting', 'importing')`;
   const results = await database.batch([
     database
+      .prepare(`INSERT INTO r2_object_deletion_queue
+      (r2_key, source_kind, source_id, multipart_upload_id)
+      SELECT r2_key, 'capture_upload', write_id, upload_id FROM capture_image_uploads
+      WHERE capture_id = (${deletableCapture})
+      ON CONFLICT (r2_key) DO UPDATE SET multipart_upload_id =
+        coalesce(excluded.multipart_upload_id, r2_object_deletion_queue.multipart_upload_id)`)
+      .bind(captureId),
+    database
       .prepare(
         `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
          SELECT image_assets.r2_key, 'image_asset', image_assets.id
@@ -87,14 +95,15 @@ export async function deleteBottleCaptureData({
       .prepare(`DELETE FROM bottle_capture_runs WHERE capture_id = (${deletableCapture})`)
       .bind(captureId),
     database
+      .prepare(`DELETE FROM capture_image_uploads WHERE capture_id = (${deletableCapture})`)
+      .bind(captureId),
+    database
       .prepare(`DELETE FROM bottle_captures WHERE id = (${deletableCapture})`)
       .bind(captureId),
     database.prepare(
       `DELETE FROM image_assets
-       WHERE id IN (
-         SELECT source_id
-         FROM r2_object_deletion_queue
-         WHERE source_kind = 'image_asset'
+       WHERE r2_key IN (
+         SELECT r2_key FROM r2_object_deletion_queue
        )
        AND NOT EXISTS (
          SELECT 1
@@ -103,7 +112,7 @@ export async function deleteBottleCaptureData({
        )`,
     ),
   ]);
-  return results[7]?.meta.changes === 1;
+  return results.at(-2)?.meta.changes === 1;
 }
 
 export async function deleteSiteData({
@@ -118,6 +127,16 @@ export async function deleteSiteData({
       AND status IN ('queued', 'extracting', 'importing')
   )`;
   const results = await database.batch([
+    database
+      .prepare(`INSERT INTO r2_object_deletion_queue
+      (r2_key, source_kind, source_id, multipart_upload_id)
+      SELECT uploads.r2_key, 'capture_upload', uploads.write_id, uploads.upload_id
+      FROM capture_image_uploads AS uploads
+      INNER JOIN bottle_captures ON bottle_captures.id = uploads.capture_id
+      WHERE bottle_captures.site_id = (${deletableSite})
+      ON CONFLICT (r2_key) DO UPDATE SET multipart_upload_id =
+        coalesce(excluded.multipart_upload_id, r2_object_deletion_queue.multipart_upload_id)`)
+      .bind(siteId),
     database
       .prepare(
         `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
@@ -186,6 +205,10 @@ export async function deleteSiteData({
          WHERE capture_id IN (SELECT id FROM bottle_captures WHERE site_id = (${deletableSite}))`,
       )
       .bind(siteId),
+    database
+      .prepare(`DELETE FROM capture_image_uploads
+      WHERE capture_id IN (SELECT id FROM bottle_captures WHERE site_id = (${deletableSite}))`)
+      .bind(siteId),
     database.prepare(`DELETE FROM bottle_captures WHERE site_id = (${deletableSite})`).bind(siteId),
     database.prepare(`DELETE FROM image_assets WHERE site_id = (${deletableSite})`).bind(siteId),
     database
@@ -234,19 +257,26 @@ export async function drainR2ObjectDeletionQueue({
   for (let batchNumber = 0; batchNumber < maximumDeletionBatchesPerDrain; batchNumber += 1) {
     const queued = await database
       .prepare(
-        `SELECT r2_key
+        `SELECT r2_key, multipart_upload_id
          FROM r2_object_deletion_queue
          ORDER BY attempts, created_at
          LIMIT ?`,
       )
       .bind(deletionBatchSize)
-      .all<{ readonly r2_key: string }>();
+      .all<{ readonly r2_key: string; readonly multipart_upload_id: string | null }>();
     const keys = queued.results.map((row) => row.r2_key);
     if (keys.length === 0) {
       break;
     }
 
     try {
+      // Abort first: deleting an absent key alone cannot prevent an in-flight
+      // multipart completion from recreating it after this drain has returned.
+      for (const row of queued.results) {
+        if (row.multipart_upload_id !== null) {
+          await bucket.resumeMultipartUpload(row.r2_key, row.multipart_upload_id).abort();
+        }
+      }
       await bucket.delete(keys);
     } catch (error) {
       const message = shortQueueError(error);

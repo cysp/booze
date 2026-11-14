@@ -1,9 +1,11 @@
 export type { BoozeDatabase } from "./client.ts";
 export { createD1Client, createD1SessionClient } from "./client.ts";
 export {
+  additionReceipts,
   bottleCaptureImages,
   bottleCaptureRuns,
   bottleCaptures,
+  captureImageUploads,
   bottleLocations,
   bottles,
   criticReviews,

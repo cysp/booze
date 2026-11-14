@@ -441,8 +441,6 @@ async function importCaptureCandidateStep({
       workflowInstanceId,
       quantity: context.capture.quantity,
       siteId: context.capture.siteId,
-      storageLocationId: context.capture.storageLocationId,
-      positionHint: context.capture.positionHint,
     });
   });
 }

@@ -606,7 +606,10 @@ async function request(
     {
       method,
       headers: { "content-type": "application/json", "x-dev-user": "tester" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...(method === "POST" && path === "/bottles" ? { operationId: crypto.randomUUID() } : {}),
+        ...payload,
+      }),
     },
     bindings,
   );
