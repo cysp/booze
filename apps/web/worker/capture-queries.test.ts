@@ -337,8 +337,8 @@ await describe("bounded capture reads", async () => {
     formData.append("images", new File(["photo"], "label.jpg", { type: "image/jpeg" }));
     const { bucket } = multipartBucket();
     const workflow = {
-      async create({ id }: { readonly id: string }) {
-        return { id };
+      async createBatch({ instances }: { readonly instances: readonly { readonly id: string }[] }) {
+        return { created: instances.map(({ id }) => ({ id })), errors: [] };
       },
     };
     const response = await fixture.request(
@@ -346,7 +346,7 @@ await describe("bounded capture reads", async () => {
       { method: "POST", body: formData },
       {
         ...fixture.bindings,
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The route only calls create() on this Workflow test binding.
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The route only calls createBatch() on this Workflow test binding.
         BOTTLE_CAPTURE_WORKFLOW: workflow as unknown as Workflow,
         IMAGE_BUCKET: bucket,
       },

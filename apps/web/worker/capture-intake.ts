@@ -17,6 +17,7 @@ import {
 } from "../shared/addition-operation.ts";
 import { additionReceiptStatement, getAdditionReceipt } from "./addition-receipts.ts";
 import { errorDetails, logError } from "./observability.ts";
+import { commitOperation } from "./operation-transaction.ts";
 
 const supportedImageTypes = new Set([
   "image/jpeg",
@@ -112,7 +113,7 @@ export async function createBottleCapture(
     captureId = crypto.randomUUID();
     const id = captureId;
     try {
-      await database.batch([
+      await commitOperation({ database, userId, source: "http" }, siteId, [
         additionReceiptStatement(database, operation, { captureId }),
         database.insert(bottleCaptures).values({
           id,
@@ -149,7 +150,8 @@ export async function createBottleCapture(
   try {
     for (const [sortOrder, file] of files.entries())
       await saveOriginal({ bucket, database, captureId, sortOrder, file });
-    // Only the request that transitions intake to queued launches extraction.
+    // Queued and its persisted owner are a durable launch intent. Receipt
+    // replays and scheduled maintenance can finish the handoff independently.
     const [finished] = await database
       .update(bottleCaptures)
       .set({

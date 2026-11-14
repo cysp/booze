@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
 import { describe, expect, it, vi } from "vitest";
@@ -126,7 +126,7 @@ it("preserves unsaved corrections when a newer extraction arrives", async () => 
     />,
   );
   expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue("Manual producer");
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
   expect(onImport).not.toHaveBeenCalled();
 });
 
@@ -271,4 +271,236 @@ it("preserves literal grape names while saving other capture corrections", async
   expect(onSaveReview.mock.calls[0]?.slice(0, 2)).toEqual(["capture-1", 2]);
   expect(onSaveReview.mock.calls[0]?.[2].wine.grapeVarieties).toEqual(grapeVarieties);
   expect(onSaveReview.mock.calls[0]?.[2].bottle.volumeMl).toBe(1500);
+});
+
+function reviewWithIssue(path: string, rawValue: string): CaptureRunResource {
+  return {
+    ...run,
+    importCandidate: {
+      wine: { wineryName: "Rowlee", grapeVarieties: ["Shiraz"], vintageStatus: "unknown" },
+      bottle: {},
+      validationIssues: [{ path, rawValue, message: "Check this value against the photos." }],
+    },
+  };
+}
+
+function reviewActions() {
+  return {
+    wines: [],
+    canWrite: true,
+    disabled: false,
+    onDirtyChange: vi.fn<(dirty: boolean) => void>(),
+    onBusyChange: vi.fn<(busy: boolean) => void>(),
+    onImport: vi.fn(async () => ({ ok: true as const })),
+    onSaveReview: vi.fn(
+      async (_id: string, reviewRevision: number, reviewCandidate: CaptureReviewCandidate) => ({
+        ok: true as const,
+        reviewRevision: reviewRevision + 1,
+        reviewCandidate,
+      }),
+    ),
+  };
+}
+
+it("labels an unknown physical size as a default and requires human confirmation even for confident extraction", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  render(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({
+        quantity: 3,
+        latestRun: {
+          ...run,
+          importCandidate: {
+            wine: { wineryName: "Rowlee", grapeVarieties: ["Shiraz"] },
+            bottle: {},
+            confidence: 1,
+          },
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText(/confirm adding 3 bottles to inventory/u)).toBeVisible();
+  expect(screen.getByText(/750 mL by default/u)).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Bottle size (ml)" })).toHaveValue("");
+  await user.click(screen.getByText("Original extracted facts"));
+  expect(screen.queryByText("750", { selector: "dd" })).not.toBeInTheDocument();
+  expect(actions.onImport).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Add bottles as new wine" }));
+  expect(actions.onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
+    expectedReviewRevision: 0,
+  });
+});
+
+it("keeps invalid raw bottle size visible and blocks unrelated saves and stock confirmation", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  render(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({ latestRun: reviewWithIssue("bottle.volumeMl", "750 mL extra") })}
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "Bottle size (ml)" })).toHaveValue("750 mL extra");
+  expect(screen.queryByText(/750 mL by default/u)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
+  await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Check cork");
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(screen.getByText("Bottle size (ml) must be a finite number.")).toBeVisible();
+  expect(actions.onSaveReview).not.toHaveBeenCalled();
+  expect(actions.onImport).not.toHaveBeenCalled();
+});
+
+it.each(["", "0", "30001", "750.5"])(
+  "requires a schema-valid physical size instead of clearing the original invalid value to %j",
+  async (volume) => {
+    const user = userEvent.setup();
+    const actions = reviewActions();
+    render(
+      <CaptureReview
+        {...actions}
+        capture={captureFixture({ latestRun: reviewWithIssue("bottle.volumeMl", "750 mL extra") })}
+      />,
+    );
+    await user.clear(screen.getByRole("textbox", { name: "Bottle size (ml)" }));
+    if (volume !== "")
+      await user.type(screen.getByRole("textbox", { name: "Bottle size (ml)" }), volume);
+    await user.click(screen.getByRole("button", { name: "Save corrections" }));
+    expect(actions.onSaveReview).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
+    expect(screen.queryByText(/750 mL by default/u)).not.toBeInTheDocument();
+  },
+);
+
+it("saves the corrected physical size before explicitly confirming stock with its revision", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  render(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({ latestRun: reviewWithIssue("bottle.volumeMl", "750 mL extra") })}
+    />,
+  );
+  await user.clear(screen.getByRole("textbox", { name: "Bottle size (ml)" }));
+  await user.type(screen.getByRole("textbox", { name: "Bottle size (ml)" }), "1500");
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(actions.onSaveReview.mock.calls[0]?.[2].bottle.volumeMl).toBe(1500);
+  expect(actions.onImport).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Add bottles as new wine" }));
+  expect(actions.onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
+    expectedReviewRevision: 1,
+  });
+});
+
+it("does not acknowledge a parsable raw size through an unrelated edit, but accepts deliberate re-entry", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  render(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({ latestRun: reviewWithIssue("bottle.volumeMl", "750") })}
+    />,
+  );
+  await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Check cork");
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(actions.onSaveReview).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox", { name: "Bottle size (ml)" })).toHaveValue("750");
+  await user.clear(screen.getByRole("textbox", { name: "Bottle size (ml)" }));
+  await user.type(screen.getByRole("textbox", { name: "Bottle size (ml)" }), "750");
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(actions.onSaveReview.mock.calls[0]?.[2].bottle.volumeMl).toBe(750);
+});
+
+it.each([
+  { path: "wine.alcoholPercent", rawValue: "about 14%", blocked: false },
+  { path: "bottle.volumeMl", rawValue: "750 mL extra", blocked: true },
+])(
+  "keeps an existing wine's facts while protecting physical issues at $path",
+  async ({ path, rawValue, blocked }) => {
+    const user = userEvent.setup();
+    const actions = reviewActions();
+    render(
+      <CaptureReview
+        {...actions}
+        capture={captureFixture({
+          latestRun: {
+            ...reviewWithIssue(path, rawValue),
+            matchResult: { wineVintageCandidates: [{ id: "existing", label: "Existing Rowlee" }] },
+          },
+        })}
+      />,
+    );
+    const add = screen.getByRole("button", { name: "Add bottles to Existing Rowlee" });
+    if (blocked) {
+      expect(add).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Existing wine in this site" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      expect(actions.onImport).not.toHaveBeenCalled();
+    } else {
+      expect(add).toBeEnabled();
+      expect(actions.onImport).not.toHaveBeenCalled();
+      await user.click(add);
+      expect(actions.onImport).toHaveBeenCalledExactlyOnceWith("capture-1", "existing", {
+        expectedReviewRevision: 0,
+      });
+    }
+  },
+);
+
+it("requires deliberate clearing of invalid ABV and retains the unknown value after refresh", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  const latestRun = reviewWithIssue("wine.alcoholPercent", "about 14%");
+  const { rerender } = render(
+    <CaptureReview {...actions} capture={captureFixture({ latestRun })} />,
+  );
+  expect(screen.getByRole("textbox", { name: "Alcohol (%)" })).toHaveValue("about 14%");
+  await user.type(
+    screen.getByRole("textbox", { name: "Wine notes and extraction disagreements" }),
+    "Back label unclear",
+  );
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(actions.onSaveReview).not.toHaveBeenCalled();
+  await user.clear(screen.getByRole("textbox", { name: "Alcohol (%)" }));
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  const saved = actions.onSaveReview.mock.calls[0]?.[2];
+  expect(saved?.wine.alcoholPercent).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Alcohol (%)" })).toHaveValue("");
+  rerender(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({ latestRun, reviewCandidate: saved ?? null, reviewRevision: 1 })}
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "Alcohol (%)" })).toHaveValue("");
+  await user.click(screen.getByText("Original extracted facts"));
+  expect(
+    within(screen.getByRole("list", { name: "Original extraction issues" })).getByText(
+      /about 14%/u,
+    ),
+  ).toBeVisible();
+});
+
+it("requires an invalid vintage to be corrected or explicitly acknowledged as unknown", async () => {
+  const user = userEvent.setup();
+  const actions = reviewActions();
+  render(
+    <CaptureReview
+      {...actions}
+      capture={captureFixture({ latestRun: reviewWithIssue("wine.vintageYear", "202?") })}
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "Vintage year" })).toHaveValue("202?");
+  expect(screen.getByRole("textbox", { name: "Vintage year" })).toBeEnabled();
+  await user.click(screen.getByRole("combobox", { name: "Vintage status" }));
+  await user.click(screen.getByRole("option", { name: "Unknown" }));
+  await user.click(screen.getByRole("button", { name: "Save corrections" }));
+  expect(actions.onSaveReview.mock.calls[0]?.[2].wine).toMatchObject({
+    vintageStatus: "unknown",
+    vintageYear: null,
+  });
+  expect(screen.getByRole("textbox", { name: "Vintage year" })).toHaveValue("");
 });

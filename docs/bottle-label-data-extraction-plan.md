@@ -1,4 +1,4 @@
-> Historical planning note: the implemented extraction contract now follows the UC Davis-aligned `winery_name`, `brand_name`, `wine_designation`, `vintage`, `grape_varieties`, and bottle-fact vocabulary documented in `docs/bottle-label-prompt-rationale.md`. Treat the older `producer` / `wine_name_or_cuvee` examples below as design history, not the current live schema.
+> Historical planning note: model recommendations, field examples, and reconciliation proposals below describe an earlier experiment. See the [current capture workflow rationale](bottle-capture-workflow-rationale.md) and [extractor source](../apps/web/worker/bottle-ocr.ts) for the implemented contract.
 
 ## Assumption to correct
 

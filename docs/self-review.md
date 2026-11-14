@@ -1,5 +1,7 @@
 # Audit self review
 
+This is a historical review of the change identified below, not current implementation guidance. See [implementation status](status.md) and [product contracts](product.md) for the maintained view.
+
 Reviewed on 2026-09-08 against `main` at `bb63ad8`. The original audit started at `5e3d9c6`; its changes were rebased onto current `main` before publication. Current dependency pins, Astryx adaptations, generated theme files, and bundle-budget changes were retained. Existing schema and migrations are unchanged.
 
 The review used independent Standards and Spec passes, plus a persistence review focused on concurrent writes, interrupted imports, Workflow replay, and image retention. The spec is the request to simplify and harden the project, optimise user experience, and preserve stored data, together with [product requirements](product.md) and the [critic-review ADR](adr/0001-critic-review-facts.md).

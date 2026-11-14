@@ -17,6 +17,7 @@ import { requireAuthenticatedUser, requireSitePermission, upsertSite } from "../
 import { created, locationHeader, noContent } from "../api/http.ts";
 import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
+import { operationConstraintFailed, operationPermissionGuard } from "../operation-transaction.ts";
 import { deleteSiteData, tryDrainR2ObjectDeletionQueue } from "../deletion.ts";
 
 const createSiteSchema = z.object({
@@ -78,10 +79,29 @@ export const siteRoutes = new Hono<{ Bindings: Bindings }>()
       siteId,
       userId: authenticatedUser.userId,
     });
-    await database
-      .update(sites)
-      .set({ name: payload.name, updatedAt: sql`CURRENT_TIMESTAMP` })
-      .where(eq(sites.id, siteId));
+    try {
+      await database.batch([
+        operationPermissionGuard(
+          { database, userId: authenticatedUser.userId, source: "http" },
+          siteId,
+          "site.manage",
+        ),
+        database
+          .update(sites)
+          .set({ name: payload.name, updatedAt: sql`CURRENT_TIMESTAMP` })
+          .where(eq(sites.id, siteId)),
+      ]);
+    } catch (error) {
+      if (operationConstraintFailed(error, "NOT NULL constraint failed: site_memberships.role")) {
+        await requireSitePermission({
+          database,
+          siteId,
+          userId: authenticatedUser.userId,
+          permission: "site.manage",
+        });
+      }
+      throw error;
+    }
 
     return context.json({ data: { id: siteId, name: payload.name } });
   })
@@ -101,7 +121,13 @@ export const siteRoutes = new Hono<{ Bindings: Bindings }>()
       siteId,
       userId: authenticatedUser.userId,
     });
-    if (!(await deleteSiteData({ database: context.env.DB, siteId }))) {
+    if (
+      !(await deleteSiteData({
+        database: context.env.DB,
+        siteId,
+        userId: authenticatedUser.userId,
+      }))
+    ) {
       throw new HTTPException(409, {
         message: "Wait for capture processing to finish before deleting this site",
       });

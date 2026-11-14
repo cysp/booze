@@ -2,52 +2,48 @@
 
 ## Caller usage
 
-`BottleCaptureWorkflow` owns capture orchestration:
+`BottleCaptureWorkflow` prepares a draft. Only an explicit human confirmation through `importReviewedCapture` can add stock.
 
-1. mark the capture as extracting
-2. create a capture run
-3. run each configured extractor in its own workflow step, sequentially
-4. reconcile extractor evidence in its own workflow step
-5. build the import candidate
-6. write the extraction artifact
-7. import or mark the capture for review
-8. record the final capture and run state
+1. Claim the queued capture for its reserved Workflow instance.
+2. Create an owned capture run.
+3. Extract label evidence with the configured `google/gemini-3-flash-preview` model in one durable step.
+4. Normalize the model's fields into a typed candidate, retaining invalid label values as validation issues.
+5. Write the full extraction artifact and a compact candidate.
+6. Record `needs_review`, including warnings and field/image notes.
 
-`bottle-ocr.ts` owns model prompts, schemas, provider calls, and response validation. `bottle-extractor.ts` owns capture-specific adaptation: reading capture images from R2, invoking one extractor, invoking reconciliation, and converting the reconciled result into an import candidate.
+There is no reconciliation model, confidence threshold for permission, inferred existing-wine selection, or stock-writing Workflow step. The reviewer can create a distinct wine or deliberately select an existing wine ID using bounded search. Selecting a wine does not apply extracted wine metadata to that shared record.
 
-## Type sketch
+`bottle-ocr.ts` owns the configured model request, prompt, response validation, and raw response. Its Zod schema also generates the provider JSON schema. `bottle-extractor.ts` owns capture-specific image preparation and deterministic conversion from evidence to a candidate. Structured grape arrays remain arrays; punctuation is not a delimiter. Numeric label strings are parsed as complete values, including metric unit conversion and unambiguous comma decimals. Invalid or ambiguous values remain visible as `validationIssues` rather than silently becoming defaults.
 
-```ts
-type CaptureExtractorResult = {
-  readonly diagnostics: readonly BottleOcrDiagnostic[];
-  readonly extractorId: string;
-  readonly model: string;
-  readonly result: BottleExtractorResult;
-};
+## Durable execution and resource bounds
 
-type CaptureReconciliationResult = {
-  readonly combined: BottleCombinedExtraction;
-  readonly diagnostics: readonly BottleOcrDiagnostic[];
-  readonly model: string;
-};
+Start, run creation, extraction, artifact writing, and final recording remain separate Workflow steps. The extraction step retains its timeout and one transient retry; a deliberate user retry reserves a new Workflow instance and creates a new run. Each fresh side-effect step checks the current owner, latest run, and `extracting` status. Final run and capture writes are fenced as well, including when an older deployment cached a start/run context without owner fields. Failed, reviewed, historical `importing`, and imported captures are not automatically restarted.
 
-async function extractCaptureLabelEvidence(
-  args,
-): Promise<Omit<CaptureExtractorResult, "diagnostics">>;
-async function reconcileCaptureLabelEvidence(
-  args,
-): Promise<Omit<CaptureReconciliationResult, "diagnostics">>;
-function buildCaptureImportCandidate(args): CaptureImportCandidate;
-```
+Photos are processed sequentially into JPEG inference copies of at most 2048 by 2048 pixels and 2 MiB each. Originals remain in R2. A normal extraction attempt invokes one model instead of three extractors and a fourth reconciliation model, reducing request payloads and model dependencies. No labeled accuracy corpus exists, and no hosted model calls were used to validate this change; extraction accuracy is unverified.
 
-## Synthesis decision
+## Evidence and stored compatibility
 
-The workflow layer is the right place to split reliability boundaries because Cloudflare Workflows can retry and resume individual `step.do` calls. Keeping extractor fan-out inside `bottle-ocr.ts` made one retry boundary cover image loading, every model call, reconciliation, import, and database finalization. The refactor keeps the OCR contract intact while making each model call and reconciliation independently observable. Each extractor keeps its own retry step, but the steps run sequentially to avoid holding several image payloads and serialized model requests in the same Worker isolate. Photos are processed one at a time into scale-down JPEG inference copies of at most 2048 by 2048 pixels and 2 MiB each. Originals stay in R2 unchanged. This trades extraction latency for bounded memory; capture progress remains visible while the user continues browsing.
+New extraction artifacts identify `capture-extraction-v2` and retain:
 
-The design deliberately avoids new D1 tables for per-step state. Step diagnostics are logged as structured JSON and retained in the existing extraction/error R2 artifacts. That is enough for current operations without committing to a schema before the failure modes are better understood.
+- capture, Workflow, run, quantity, and image references;
+- extractor identity and model configuration, including prompt version;
+- the exact provider response as JSON text, parsed field evidence/confidence/notes, raw text by image, warnings, and request diagnostics;
+- the normalized candidate, its raw suggestion, validation issues, and review reasons.
 
-## Import and cleanup
+D1 keeps the normalized candidate and validation issues for review, omitting the bulky raw suggestion; the full evidence stays in the artifact. Confidence is informational. Unknown clean volume stays omitted, with the review UI explaining the 750 mL default before confirmation. An unparsed volume cannot fall through to that default: it requires a valid corrected value.
 
-Bottle rows, their locations, and the import completion receipt commit in one D1 batch. A replay recognizes that receipt and returns the committed result. Retry reservations and Workflow ownership prevent an old run from overwriting a newer run, and committed imports cannot be downgraded by later error handling.
+Existing multi-model artifacts, raw suggestions, model/run records, import receipts, and image keys are not migrated, rewritten, or deleted. Their generic stored read contracts still expose old disagreements and review reasons. A cached legacy extractor result can continue to review without a new combination call; if its checkpoint predates raw-response/configuration retention, the new artifact explicitly records `legacy_workflow_checkpoint` and null provenance fields rather than inventing them. Historical imported receipts remain authoritative before obsolete candidate parsing. Historical stuck `importing` recovery is outside this change.
 
-New image objects use unique keys, while duplicate image content reuses an existing asset record. Losing concurrent uploads queue only their own unused object keys. Cleanup preserves keys still referenced by live images or capture-run artifacts. Existing image keys and migration history remain unchanged.
+## Human confirmation and cleanup
+
+Manual import validates the reviewed snapshot, actor's current write permission, Workflow owner, latest run, review revision, site-scoped wine choice, and destination in the same atomic D1 batch as stock and the completion receipt. There is no preliminary import claim. A failure leaves the draft reviewable; a replay or lost acknowledgement returns the committed receipt without adding bottles again. Notes-only corrections do not clear unresolved numeric evidence. An existing-wine choice can discard wine-field issues, while physical bottle issues still require correction.
+
+Capture-owned multipart manifests and deletion fencing preserve image lifetimes. New captures use unique owned image keys, including duplicate photo content. Cleanup aborts owned multipart work before deleting objects and preserves legacy shared originals/thumbnails. Existing migration history stays unchanged.
+
+## Verification retained
+
+The high-confidence Workflow regression first failed against the automatic-import implementation (`imported` instead of `needs_review`) and then passed with unchanged expectations. A notes-only alcohol correction likewise first imported incorrectly and now remains blocked until correction. Mocked HTTP exercises the full single-model draft path, photos, schema/configuration, artifact provenance, and zero stock. Separate explicit-confirmation tests verify exact quantity, one receipt, replay before old-candidate validation, lost acknowledgements, transaction rollback, natural-key conflicts, permission revocation, owner/revision/site/destination fences, and legacy partial-bottle preservation.
+
+Confidence-threshold, combiner-voting, and inferred-name-matching tests were retired with those production mechanisms. Their required guarantees remain covered by direct field/evidence preservation, numeric parser regression cases, explicit existing-wine selection, distinct wine creation, and atomic human confirmation. Existing inference-image bounds and cross-layer accepted-text tests remain in place.
+
+The provider wire format follows the primary [Zod JSON Schema](https://zod.dev/json-schema), [OpenRouter structured output](https://openrouter.ai/docs/guides/features/structured-outputs), and [Gemini schema](https://aistudio.google.com/docs/structured-output) documentation. Local mocked requests validate the generated schema and representative payloads; they do not establish provider availability or accuracy.

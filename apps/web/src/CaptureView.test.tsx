@@ -166,7 +166,7 @@ it("shows actionable import errors on the affected capture", async () => {
   const onImport = vi.fn<CaptureImportAction>(async () => ({ ok: false, message }));
   renderCapture({ captures: [captureFixture({ latestRun: incompleteRun })], onImport });
   await openReview(user);
-  await user.click(screen.getByRole("button", { name: "Create new" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles as new wine" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
     expectedReviewRevision: 0,
   });
@@ -178,10 +178,29 @@ it("passes an existing wine selection through the import action", async () => {
   const onImport = vi.fn<CaptureImportAction>(resolvedImport);
   renderCapture({ captures: [captureFixture({ latestRun: incompleteRun })], onImport });
   await openReview(user);
-  await user.click(screen.getByRole("button", { name: "Use Existing Shiraz" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles to Existing Shiraz" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", "existing", {
     expectedReviewRevision: 0,
   });
+});
+
+it("retries an unconfirmed queued start without opening a review or allowing deletion", async () => {
+  const user = userEvent.setup();
+  const onRetry = vi.fn(async () => true);
+  const onImport = vi.fn<CaptureImportAction>(resolvedImport);
+  renderCapture({
+    captures: [
+      captureFixture({ status: "queued", errorMessage: "Workflow start could not be confirmed." }),
+    ],
+    onRetry,
+    onImport,
+  });
+  expect(screen.getByText(/Capture is saved and queued/u)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Review capture" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Delete capture" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(onRetry).toHaveBeenCalledExactlyOnceWith("capture-1");
+  expect(onImport).not.toHaveBeenCalled();
 });
 
 function photo(name: string): File {
@@ -403,7 +422,7 @@ it("saves manual corrections separately and requires an explicit revision-aware 
   await openReview(user);
   await user.clear(screen.getByRole("textbox", { name: "Producer / winery" }));
   await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), "RIKARD");
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   expect(onSaveReview).toHaveBeenCalledOnce();
@@ -418,7 +437,7 @@ it("saves manual corrections separately and requires an explicit revision-aware 
   expect(onImport).not.toHaveBeenCalled();
   await user.click(screen.getByText("Original extracted facts"));
   expect(screen.getByText("RIKARD Wines")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Create new" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles as new wine" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
     expectedReviewRevision: 1,
   });
@@ -441,7 +460,7 @@ it("retains cleared values and edits when saving corrections fails", async () =>
   expect(
     screen.getByText("Another editor changed this capture. Refresh before saving."),
   ).toBeVisible();
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 });
 
@@ -455,10 +474,10 @@ it("requires saving an empty manual review before explicit unidentified import",
     onImport,
   });
   await openReview(user);
-  expect(screen.getByRole("button", { name: "Save as unidentified wine" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add bottles as unidentified wine" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   expect(onImport).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Save as unidentified wine" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles as unidentified wine" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", undefined, {
     expectedReviewRevision: 1,
     allowUnidentified: true,
@@ -509,14 +528,16 @@ it.each([
     onImport,
   });
   await openReview(user);
-  expect(screen.queryByRole("button", { name: "Use Existing Shiraz" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Use selected wine" })).toBeDisabled();
+  expect(
+    screen.queryByRole("button", { name: "Add bottles to Existing Shiraz" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add bottles to selected wine" })).toBeDisabled();
   await user.click(screen.getByRole("combobox", { name: "Existing wine in this site" }));
   expect(screen.getByRole("option", { name: /first-wine/u })).toBeVisible();
   expect(screen.queryByRole("option", { name: /Other site wine/u })).not.toBeInTheDocument();
   await user.click(screen.getByRole("option", { name: /second-wine/u }));
   expect(onImport).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Use selected wine" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles to selected wine" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", "second-wine", {
     expectedReviewRevision: 2,
   });
@@ -551,7 +572,7 @@ it.each([0, 1])(
     await user.type(producer, "unavailable edit");
     expect(producer).toHaveValue("My unsaved correction");
     expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add bottles as new wine" })).toBeDisabled();
     rerender(
       captureElement({
         captures: [{ ...capture, status: "needs_review", latestRun: incompleteRun }],
@@ -589,7 +610,7 @@ it("can reuse a depleted wine after saving capture corrections", async () => {
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   await user.click(screen.getByRole("combobox", { name: "Existing wine in this site" }));
   await user.click(screen.getByRole("option", { name: /depleted-wine/u }));
-  await user.click(screen.getByRole("button", { name: "Use selected wine" }));
+  await user.click(screen.getByRole("button", { name: "Add bottles to selected wine" }));
   expect(onImport).toHaveBeenCalledExactlyOnceWith("capture-1", "depleted-wine", {
     expectedReviewRevision: 1,
   });

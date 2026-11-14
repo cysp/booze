@@ -11,7 +11,10 @@ await describe("durable deletion", async () => {
     seedSite(database, "site-1");
     seedCatalogueAndCapture(database, "site-1", "capture-1", "asset-1");
     database.exec("UPDATE bottle_captures SET status = 'extracting'");
-    assert.equal(await deleteSiteData({ database: asD1(database), siteId: "site-1" }), false);
+    assert.equal(
+      await deleteSiteData({ database: asD1(database), siteId: "site-1", userId: "user-1" }),
+      false,
+    );
     for (const table of [
       "sites",
       "bottles",
@@ -33,7 +36,7 @@ await describe("durable deletion", async () => {
     seedCatalogueAndCapture(database, "site-1", "capture-1", "asset-1");
     const auditBefore = row(database, "SELECT * FROM mcp_tool_audit_events WHERE id = 'audit-1'");
 
-    await deleteSiteData({ database: asD1(database), siteId: "site-1" });
+    await deleteSiteData({ database: asD1(database), siteId: "site-1", userId: "user-1" });
 
     for (const table of [
       "sites",
@@ -76,6 +79,8 @@ await describe("durable deletion", async () => {
     await deleteBottleCaptureData({
       captureId: "capture-1",
       database: asD1(database),
+      siteId: "site-1",
+      userId: "user-1",
     });
 
     assert.equal(scalar(database, "SELECT count(*) FROM image_assets"), 1);
@@ -88,6 +93,8 @@ await describe("durable deletion", async () => {
     await deleteBottleCaptureData({
       captureId: "capture-2",
       database: asD1(database),
+      siteId: "site-1",
+      userId: "user-1",
     });
 
     assert.equal(scalar(database, "SELECT count(*) FROM image_assets"), 0);

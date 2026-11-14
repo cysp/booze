@@ -455,7 +455,7 @@ function CaptureDashboard({
         <p role="status">Loading captures…</p>
       ) : allCount === 0 && visibleCaptures.length === 0 ? (
         <EmptyState
-          description="Submit bottle photos here and imported bottles will appear in inventory."
+          description="Submit bottle photos, review the extracted draft, then confirm adding bottles to inventory."
           title="No captures yet"
         />
       ) : visibleCaptures.length === 0 ? (
@@ -599,6 +599,8 @@ function CaptureCard({
   }, [capture.id, capture.status, capture.updatedAt, detailRetry, getAuthHeaders, listed, opened]);
   const status = detail?.status ?? capture.status;
   const canReview = status === "needs_review" || status === "failed";
+  const queuedStartUnconfirmed =
+    status === "queued" && (detail?.errorMessage ?? capture.errorMessage ?? "").trim() !== "";
 
   async function runAction(
     pending: CaptureCardAction,
@@ -680,6 +682,12 @@ function CaptureCard({
         </div>
       </dl>
       <ImportedCaptureReviewNotice status={status} hasUnsavedReview={hasUnsavedReview} />
+      {queuedStartUnconfirmed ? (
+        <p>
+          Capture is saved and queued. Starting extraction could not be confirmed. Retry checks the
+          same capture.
+        </p>
+      ) : null}
       <Button
         label={opened ? "Close details" : canReview ? "Review capture" : "View capture details"}
         isDisabled={opened && (hasUnsavedReview || isReviewBusy || pendingAction !== null)}
@@ -719,7 +727,7 @@ function CaptureCard({
         />
       ) : null}
       <div className="card-actions">
-        {canWrite && canReview ? (
+        {canWrite && (canReview || queuedStartUnconfirmed) ? (
           <Button
             isDisabled={pendingAction !== null || hasUnsavedReview || isReviewBusy}
             isLoading={isCaptureAction(pendingAction, { kind: "retry" })}
