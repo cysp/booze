@@ -75,3 +75,40 @@ it("persists the review snapshot with its revision and returns the confirmed ser
   );
   expect(completeMutation).toHaveBeenCalledWith(expect.objectContaining({ refresh: "captures" }));
 });
+
+it("tracks the canonical submitted capture ID before refreshing its page", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({ data: { captureId: "capture / opaque", intakeComplete: true } }),
+    ),
+  );
+  const trackPendingCapture = vi.fn<(id: string) => void>();
+  const completeMutation = vi.fn(async () => {
+    expect(trackPendingCapture).toHaveBeenCalledWith("capture / opaque");
+  });
+  const { result } = renderHook(() =>
+    useCaptureController({
+      additionScope: "pending-tracking",
+      completeMutation,
+      getAuthHeaders: async () => ({}),
+      setStatus: vi.fn<(status: string) => void>(),
+      writableSites: sitesFixture,
+      trackPendingCapture,
+    }),
+  );
+  await act(async () => {
+    await result.current.submitCapture(
+      {
+        siteId: "site-owner",
+        site: "Home",
+        storageLocationId: "",
+        location: "",
+        position: "",
+        quantity: "1",
+      },
+      [],
+    );
+  });
+  expect(trackPendingCapture).toHaveBeenCalledExactlyOnceWith("capture / opaque");
+});

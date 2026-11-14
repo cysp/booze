@@ -14,7 +14,7 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
 import { calculateDrinkStatus } from "../api/inventory.ts";
-import { decodePageCursor, pageFromRows, pageLimit, type Page } from "./pagination.ts";
+import { decodePageCursor, pageFromRows, pageLimit, type Page } from "../read-pagination.ts";
 import type { listWinesInputSchema, wineVintageSummarySchema } from "./schemas.ts";
 import {
   andAll,

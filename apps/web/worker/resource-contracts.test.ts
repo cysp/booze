@@ -6,11 +6,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   bottleResourceSchema,
-  captureResourceSchema,
   siteResourceSchema,
   storageLocationResourceSchema,
 } from "../shared/catalogue-resources.ts";
-import { listBottles } from "./api/inventory.ts";
+import { captureResourceSchema } from "../shared/capture-resources.ts";
+import { getBottle } from "./api/inventory.ts";
 import { userIdForClerkUser } from "./api/ids.ts";
 import { problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
@@ -54,8 +54,7 @@ await it("preserves exact grape array elements and historical numeric values in 
       )
       .run(id);
   }
-  const [bottle] = bottleResourceSchema.array().parse(await listBottles(fixture));
-  assert.ok(bottle);
+  const bottle = bottleResourceSchema.parse(await getBottle({ ...fixture, bottleId: "bottle" }));
   assert.deepEqual(new Set(bottle.grapeVarieties), new Set(names));
   assert.equal(bottle.volumeMl, 75000, "Historical values stay visible for deliberate correction");
   assert.equal(bottle.alcoholPercent, 14.5);

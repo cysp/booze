@@ -1,875 +1,449 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { bottles, captures, locations, sites } from "../e2e/catalogue-fixtures.ts";
 import { useCatalogue } from "./useCatalogue.ts";
 
-const dataByPath = new Map<string, readonly unknown[]>([
-  ["/api/bottles", bottles],
-  ["/api/wines", bottles],
-  ["/api/bottle-captures", captures],
-  ["/api/storage-locations", locations],
-  ["/api/sites", sites],
-]);
-
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  return {};
+const auth = async (): Promise<Record<string, string>> => ({});
+const inventoryOptions = {
+  area: "inventory",
+  inventoryPath: "/api/bottles?limit=50",
+  captureView: "action",
+} as const;
+const captureOptions = { ...inventoryOptions, area: "captures" } as const;
+const summary = {
+  inStockBottleCount: 101,
+  drinkQueueBottleCount: 25,
+  captures: { actionable: 1, processing: 0, imported: 5 },
+};
+const captureSummaries = captures.map((capture) => ({
+  ...capture,
+  imageCount: 0,
+  previewImage: null,
+}));
+function response(data: unknown): Response {
+  return new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
 }
-
+function inventoryResponse(data: readonly unknown[] = bottles): Response {
+  return response({
+    data,
+    totalCount: 101,
+    nextPageToken: "next",
+    facets: { grapeVarieties: ["Shiraz", "Riesling"], drinkStatuses: ["drink-now"] },
+  });
+}
+function captureResponse(data: readonly unknown[] = captureSummaries): Response {
+  return response({ data, totalCount: data.length, nextPageToken: null, counts: summary.captures });
+}
+function fixture(input: string | URL | Request): Response {
+  const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
+  if (url.pathname === "/api/bottles") return inventoryResponse();
+  if (url.pathname === "/api/bottle-captures") return captureResponse();
+  if (url.pathname === "/api/catalogue-summary") return response({ data: summary });
+  if (url.pathname === "/api/sites") return response({ data: sites });
+  if (url.pathname === "/api/storage-locations") return response({ data: locations });
+  if (url.pathname === "/api/bottle-capture-statuses") return response({ data: [] });
+  throw new Error(`Unexpected request ${url.pathname}`);
+}
+const pathOf = (input: string | URL | Request) =>
+  new URL(input instanceof Request ? input.url : String(input), window.location.origin).pathname;
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-describe("useCatalogue", () => {
-  it("loads wine options independently of stock and retains a failed wine refresh until retried", async () => {
-    const wine = { ...bottles[0], wineVintageId: "depleted-wine" };
-    let failWines = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles") return jsonResponse([]);
-        if (path === "/api/wines")
-          return failWines ? new Response(null, { status: 503 }) : jsonResponse([wine]);
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+describe("page-scoped catalogue ownership", () => {
+  it("loads only the active inventory page and light resources; counts and facets cover unloaded rows", async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => fixture(input));
+    vi.stubGlobal("fetch", fetch);
+    const { result } = renderHook(() => useCatalogue(auth));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
-    expect(result.current.items).toEqual([]);
-    expect(result.current.wines.map((option) => option.wineVintageId)).toEqual(["depleted-wine"]);
-    failWines = true;
-    await act(async () =>
-      result.current.completeMutation({ refresh: "catalogue", successMessage: "Saved." }),
+    expect(fetch.mock.calls.map(([input]) => pathOf(input)).toSorted()).toEqual(
+      ["/api/bottles", "/api/catalogue-summary", "/api/sites", "/api/storage-locations"].toSorted(),
     );
-    expect(result.current.refreshIssues).toContainEqual({
-      collection: "wines",
-      message: "Wines could not be refreshed. Try again.",
-    });
-    expect(result.current.wines.map((option) => option.wineVintageId)).toEqual(["depleted-wine"]);
-    await act(async () =>
-      result.current.completeMutation({ refresh: "captures", successMessage: "Capture saved." }),
-    );
-    expect(result.current.refreshIssues).toHaveLength(1);
-    failWines = false;
-    await act(async () => result.current.retryRefresh("wines"));
-    expect(result.current.refreshIssues).toEqual([]);
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0]).not.toHaveProperty("bottleNotes");
+    expect(result.current.summary.inStockBottleCount).toBe(101);
+    expect(result.current.inventory.page?.facets.grapeVarieties).toEqual(["Shiraz", "Riesling"]);
+    expect(result.current.captures).toEqual([]);
   });
-
-  it("rejects an incomplete wine response instead of exposing a silently partial choice list", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        return jsonResponse(
-          path === "/api/wines"
-            ? [bottles[0], { wineVintageId: "malformed" }]
-            : (dataByPath.get(path) ?? []),
-        );
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-    expect(result.current.wines).toEqual([]);
-    expect(result.current.refreshIssues).toEqual([
-      { collection: "wines", message: "Wines could not be refreshed. Try again." },
-    ]);
-  });
-
-  it("preserves historical saved review values without applying new-entry limits on reads", async () => {
-    const reviewCandidate = {
-      wine: {
-        wineryName: "Historical estate",
-        designation: null,
-        baseName: null,
-        displayName: null,
-        alcoholPercent: 140,
-        vintageYear: 1700,
-      },
-      bottle: { volumeMl: 75000 },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const request = requestPath(input);
-        return jsonResponse(
-          request === "/api/bottle-captures"
-            ? [{ ...captures[0], reviewCandidate }]
-            : (dataByPath.get(request) ?? []),
-        );
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-    expect(result.current.refreshIssues).toEqual([]);
-    expect(result.current.captures[0]?.reviewCandidate).toEqual(reviewCandidate);
-  });
-
-  it.each([
-    {
-      collection: "inventory",
-      path: "/api/bottles",
-      malformed: { ...bottles[0], volumeMl: "750" },
-    },
-    {
-      collection: "inventory",
-      path: "/api/bottles",
-      malformed: { ...bottles[0], grapeVarieties: [7] },
-    },
-    {
-      collection: "locations",
-      path: "/api/storage-locations",
-      malformed: { ...locations[0], parentId: 9 },
-    },
-    { collection: "sites", path: "/api/sites", malformed: { ...sites[0], bottleCount: "three" } },
-    {
-      collection: "captures",
-      path: "/api/bottle-captures",
-      malformed: { ...captures[0], images: [{ imageAssetId: "only-one-field" }] },
-    },
-    {
-      collection: "captures",
-      path: "/api/bottle-captures",
-      malformed: {
-        ...captures[0],
-        reviewCandidate: {
-          wine: { wineryName: "Estate", designation: "", alcoholPercent: "thirteen" },
-          bottle: {},
-        },
-      },
-    },
-  ] as const)(
-    "rejects malformed $collection before exposing a claimed resource shape",
-    async ({ collection, path, malformed }) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL | Request) => {
-          const request = requestPath(input);
-          return jsonResponse(request === path ? [malformed] : (dataByPath.get(request) ?? []));
-        }),
-      );
-      const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-      expect(result.current.refreshIssues.map((issue) => issue.collection)).toEqual([collection]);
-      const loaded = {
-        inventory: result.current.items,
-        locations: result.current.locations,
-        sites: result.current.sites,
-        captures: result.current.captures,
-      };
-      expect(loaded[collection]).toEqual([]);
-    },
-  );
-
-  it("keeps a newer capture failure after an older catalogue refresh finishes", async () => {
-    let inventoryRequests = 0;
-    let resolveOldInventory: ((response: Response) => void) | undefined;
-    let failCaptures = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles") {
-          inventoryRequests += 1;
-          if (inventoryRequests === 2)
-            return new Promise<Response>((resolve) => {
-              resolveOldInventory = resolve;
-            });
-        }
-        if (path === "/api/bottle-captures") {
-          if (failCaptures) return new Response(null, { status: 503 });
-          return jsonResponse(captures.map((capture) => ({ ...capture, status: "needs_review" })));
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-    let older: Promise<void> = Promise.resolve();
-    await act(async () => {
-      older = result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Older bottle save.",
-      });
-    });
-    failCaptures = true;
-    // Represents a successful DELETE followed by its failed read refresh.
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "captures",
-        successMessage: "Capture deleted.",
-      });
-    });
-    expect(result.current.refreshIssues).toEqual([
-      { collection: "captures", message: "Captures could not be refreshed. Try again." },
-    ]);
-    expect(result.current.captures).toHaveLength(captures.length);
-    await act(async () => {
-      resolveOldInventory?.(jsonResponse(bottles));
-      await older;
-    });
-    // The newer failure retains its retry affordance and status.
-    expect(result.current.captures).toHaveLength(captures.length);
-    expect(result.current.refreshIssues).toContainEqual({
-      collection: "captures",
-      message: "Captures could not be refreshed. Try again.",
-    });
-    expect(result.current.status).toBe("Capture deleted. Latest data could not be refreshed.");
-  });
-
-  it("keeps independent section failures until that section succeeds and retries only the selected section", async () => {
-    const failedPaths = new Set<string>();
+  it("loads capture summaries on visiting capture and no native lists in storage", async () => {
     const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        requests.push(path);
-        return failedPaths.has(path)
-          ? new Response(null, { status: 503 })
-          : jsonResponse(dataByPath.get(path) ?? []);
+        requests.push(pathOf(input));
+        return fixture(input);
       }),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result, rerender } = renderHook(
+      ({ area }: { readonly area: "inventory" | "captures" | "management" }) =>
+        useCatalogue(auth, { ...inventoryOptions, area }),
+      { initialProps: { area: "management" } },
+    );
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
-    expect(result.current.status).toBe("Cellar data loaded.");
-
-    failedPaths.add("/api/bottles");
-    failedPaths.add("/api/sites");
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Bottle saved.",
-      });
-    });
-    const inventoryIssue = {
-      collection: "inventory",
-      message: "Inventory could not be refreshed. Try again.",
-    };
-    const siteIssue = { collection: "sites", message: "Sites could not be refreshed. Try again." };
-    expect(result.current.refreshIssues).toEqual(
-      expect.arrayContaining([inventoryIssue, siteIssue]),
-    );
-    expect(result.current.refreshIssues).toHaveLength(2);
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "captures",
-        successMessage: "Capture deleted.",
-      });
-    });
-    expect(result.current.refreshIssues).toEqual(
-      expect.arrayContaining([inventoryIssue, siteIssue]),
-    );
-    expect(result.current.status).toBe("Capture deleted.");
-
-    failedPaths.delete("/api/sites");
+    expect(requests).not.toContain("/api/bottles");
+    expect(requests).not.toContain("/api/bottle-captures");
     requests.length = 0;
-    await act(async () => {
-      await result.current.retryRefresh("sites");
+    rerender({ area: "captures" });
+    await waitFor(() => {
+      expect(result.current.captures).toHaveLength(1);
     });
+    expect(requests).toEqual(["/api/bottle-captures"]);
+    expect(result.current.captures[0]).not.toHaveProperty("latestRun");
+    expect(result.current.captures[0]).not.toHaveProperty("reviewCandidate");
+  });
+  it("keeps committed feedback and stale data on refresh failure, and retries only the failed read", async () => {
+    let failed = false;
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        requests.push(path);
+        return failed && path === "/api/sites"
+          ? new Response(null, { status: 503 })
+          : fixture(input);
+      }),
+    );
+    const { result } = renderHook(() => useCatalogue(auth));
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    failed = true;
+    await act(async () =>
+      result.current.completeMutation({ refresh: "catalogue", successMessage: "Bottle saved." }),
+    );
+    expect(result.current.status).toBe("Bottle saved. Latest data could not be refreshed.");
+    expect(result.current.sites).toEqual(sites);
+    expect(result.current.refreshIssues).toEqual([
+      { collection: "sites", message: "Sites could not be refreshed. Try again." },
+    ]);
+    failed = false;
+    requests.length = 0;
+    await act(async () => result.current.retryRefresh("sites"));
     expect(requests).toEqual(["/api/sites"]);
-    expect(result.current.refreshIssues).toEqual([inventoryIssue]);
-    expect(result.current.status).toBe("Latest data refreshed.");
-
-    failedPaths.clear();
-    requests.length = 0;
-    await act(async () => {
-      await result.current.retryRefresh();
-    });
-    expect(requests).toEqual(["/api/bottles"]);
     expect(result.current.refreshIssues).toEqual([]);
   });
-
-  it("lets an older retry repair its own section without replacing a newer mutation failure", async () => {
-    let failSites = true;
-    let failCaptures = false;
-    let resolveSiteRetry: ((response: Response) => void) | undefined;
+  it("does not erase an independent failure when a capture mutation refreshes its own area", async () => {
+    let failed = false;
+    const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/sites") {
-          if (failSites) return new Response(null, { status: 503 });
-          return new Promise<Response>((resolve) => {
-            resolveSiteRetry = resolve;
-          });
-        }
-        if (path === "/api/bottle-captures" && failCaptures)
-          return new Response(null, { status: 503 });
-        return jsonResponse(dataByPath.get(path) ?? []);
+        const path = pathOf(input);
+        requests.push(path);
+        return failed && path === "/api/sites"
+          ? new Response(null, { status: 503 })
+          : fixture(input);
       }),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result } = renderHook(() => useCatalogue(auth, captureOptions));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
-    failSites = false;
-    let retry = Promise.resolve();
-    await act(async () => {
-      retry = result.current.retryRefresh("sites");
-    });
-    failCaptures = true;
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "captures",
-        successMessage: "Capture deleted.",
-      });
-    });
-    await act(async () => {
-      resolveSiteRetry?.(jsonResponse(sites));
-      await retry;
-    });
-    expect(result.current.refreshIssues).toEqual([
-      { collection: "captures", message: "Captures could not be refreshed. Try again." },
-    ]);
-    expect(result.current.status).toBe("Capture deleted. Latest data could not be refreshed.");
+    failed = true;
+    await act(async () =>
+      result.current.completeMutation({ refresh: "catalogue", successMessage: "Saved." }),
+    );
+    requests.length = 0;
+    await act(async () =>
+      result.current.completeMutation({ refresh: "captures", successMessage: "Capture deleted." }),
+    );
+    expect(requests.toSorted()).toEqual(
+      ["/api/catalogue-summary", "/api/bottle-captures"].toSorted(),
+    );
+    expect(result.current.refreshIssues.map((issue) => issue.collection)).toEqual(["sites"]);
+    expect(result.current.status).toBe("Capture deleted.");
   });
-
-  it("ignores stale retry success after a newer request for the same section fails", async () => {
-    let captureRequests = 0;
-    let resolveRetry: ((response: Response) => void) | undefined;
+  it("keeps newer foreground progress when an older retry finishes", async () => {
+    let retry = false;
+    let resolve: ((response: Response) => void) | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottle-captures") {
-          captureRequests += 1;
-          if (captureRequests === 2)
-            return new Promise<Response>((resolve) => {
-              resolveRetry = resolve;
-            });
-          return new Response(null, { status: 503 });
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
+      vi.fn(async (input: string | URL | Request) =>
+        pathOf(input) === "/api/sites"
+          ? retry
+            ? new Promise<Response>((done) => {
+                resolve = done;
+              })
+            : new Response(null, { status: 503 })
+          : fixture(input),
+      ),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result } = renderHook(() => useCatalogue(auth));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
-    let retry = Promise.resolve();
+    retry = true;
+    let pending = Promise.resolve();
     await act(async () => {
-      retry = result.current.retryRefresh("captures");
-    });
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "captures",
-        successMessage: "Capture deleted.",
-      });
-    });
-    await act(async () => {
-      resolveRetry?.(jsonResponse(captures));
-      await retry;
-    });
-    expect(result.current.captures).toEqual([]);
-    expect(result.current.refreshIssues).toEqual([
-      { collection: "captures", message: "Captures could not be refreshed. Try again." },
-    ]);
-    expect(result.current.status).toBe("Capture deleted. Latest data could not be refreshed.");
-  });
-
-  it("does not replace a newer action's progress message when an older retry finishes", async () => {
-    let siteRequests = 0;
-    let resolveRetry: ((response: Response) => void) | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/sites") {
-          siteRequests += 1;
-          if (siteRequests === 1) return new Response(null, { status: 503 });
-          return new Promise<Response>((resolve) => {
-            resolveRetry = resolve;
-          });
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-    let retry = Promise.resolve();
-    await act(async () => {
-      retry = result.current.retryRefresh("sites");
+      pending = result.current.retryRefresh("sites");
     });
     act(() => {
       result.current.setStatus("Saving another bottle...");
     });
     await act(async () => {
-      resolveRetry?.(jsonResponse(sites));
-      await retry;
+      resolve?.(response({ data: sites }));
+      await pending;
     });
-    expect(result.current.refreshIssues).toEqual([]);
     expect(result.current.status).toBe("Saving another bottle...");
+    expect(result.current.refreshIssues).toEqual([]);
   });
-
-  it("keeps saved feedback when a background capture refresh repairs an already-failed aggregate leg", async () => {
-    let inventoryRequests = 0;
-    let failCaptures = false;
-    let resolveInventory: ((response: Response) => void) | undefined;
+  it.each([
+    { path: "/api/bottles", value: { ...bottles[0], volumeMl: "750" }, collection: "inventory" },
+    {
+      path: "/api/bottles",
+      value: { ...bottles[0], grapeVarieties: [7] },
+      collection: "inventory",
+    },
+    { path: "/api/sites", value: { ...sites[0], bottleCount: "three" }, collection: "sites" },
+    {
+      path: "/api/storage-locations",
+      value: { ...locations[0], parentId: 9 },
+      collection: "locations",
+    },
+  ])("rejects malformed $collection responses", async ({ path, value, collection }) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles") {
-          inventoryRequests += 1;
-          if (inventoryRequests === 2)
-            return new Promise<Response>((resolve) => {
-              resolveInventory = resolve;
-            });
-        }
-        if (path === "/api/bottle-captures" && failCaptures)
-          return new Response(null, { status: 503 });
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
+      vi.fn(async (input: string | URL | Request) =>
+        pathOf(input) === path
+          ? path === "/api/bottles"
+            ? inventoryResponse([value])
+            : response({ data: [value] })
+          : fixture(input),
+      ),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result } = renderHook(() => useCatalogue(auth));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
-    failCaptures = true;
-    let completion = Promise.resolve();
+    expect(result.current.refreshIssues.map((issue) => issue.collection)).toContain(collection);
+  });
+  it("retains a newer capture failure and status after an older catalogue batch settles", async () => {
+    let slow = false;
+    let failCapture = false;
+    let resolve: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (slow && path === "/api/sites")
+          return new Promise<Response>((done) => {
+            resolve = done;
+          });
+        if (failCapture && path === "/api/bottle-captures")
+          return new Response(null, { status: 503 });
+        return fixture(input);
+      }),
+    );
+    const { result } = renderHook(() => useCatalogue(auth, captureOptions));
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    slow = true;
+    let older = Promise.resolve();
     await act(async () => {
-      completion = result.current.completeMutation({
+      older = result.current.completeMutation({
         refresh: "catalogue",
-        successMessage: "Bottle saved.",
+        successMessage: "Older save.",
       });
     });
-    expect(result.current.refreshIssues).toEqual([
-      { collection: "captures", message: "Captures could not be refreshed. Try again." },
-    ]);
-    failCaptures = false;
+    failCapture = true;
+    await act(async () =>
+      result.current.completeMutation({ refresh: "captures", successMessage: "Capture deleted." }),
+    );
     await act(async () => {
-      await result.current.loadCaptures();
+      resolve?.(response({ data: sites }));
+      await older;
     });
-    await act(async () => {
-      resolveInventory?.(jsonResponse(bottles));
-      await completion;
-    });
-    expect(result.current.refreshIssues).toEqual([]);
-    expect(result.current.status).toBe("Bottle saved.");
+    expect(result.current.status).toBe("Capture deleted. Latest data could not be refreshed.");
+    expect(result.current.refreshIssues.map((issue) => issue.collection)).toContain("captures");
+    expect(result.current.captures).toHaveLength(1);
   });
-
-  it("pauses capture polling in hidden tabs and refreshes immediately on return", async () => {
+  it("polls compact known IDs while inventory is active and treats missing as uncertain invalidation", async () => {
     vi.useFakeTimers();
-    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        requests.push(path);
-        return jsonResponse(
-          path === "/api/bottle-captures"
-            ? captures.map((capture) => ({ ...capture, status: "queued" }))
-            : (dataByPath.get(path) ?? []),
-        );
+        requests.push(pathOf(input));
+        return fixture(input);
       }),
     );
-    renderHook(() => useCatalogue(getAuthHeaders));
+    const { result } = renderHook(() => useCatalogue(auth));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      result.current.trackPendingCapture("opaque/id");
+    });
+    requests.length = 0;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(requests).toContain("/api/bottle-capture-statuses");
+    expect(requests).toContain("/api/bottles");
+    expect(requests).not.toContain("/api/bottle-captures");
+    expect(result.current.status).not.toContain("imported");
+  });
+  it("pauses progress polling in hidden tabs and checks immediately on return", async () => {
+    vi.useFakeTimers();
+    const visible = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        requests.push(pathOf(input));
+        return fixture(input);
+      }),
+    );
+    const { result } = renderHook(() => useCatalogue(auth));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      result.current.trackPendingCapture("pending");
     });
     requests.length = 0;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(requests).toEqual([]);
-
-    visibility.mockReturnValue("visible");
+    visible.mockReturnValue("visible");
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    expect(requests).toEqual(["/api/bottle-captures"]);
+    expect(requests).toContain("/api/bottle-capture-statuses");
   });
-
-  it("does not replace newer inventory with an older overlapping response", async () => {
-    let resolveInitialInventory: ((response: Response) => void) | undefined;
-    let requestedInventory = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles") {
-          if (!requestedInventory) {
-            requestedInventory = true;
-            return new Promise<Response>((resolve) => {
-              resolveInitialInventory = resolve;
-            });
-          }
-          return jsonResponse(bottles.map((bottle) => ({ ...bottle, bottleNotes: "Newer fact" })));
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(requestedInventory).toBe(true);
-    });
-    await act(async () => {
-      await result.current.loadCatalogue();
-    });
-    expect(result.current.items[0]?.bottleNotes).toBe("Newer fact");
-
-    await act(async () => {
-      resolveInitialInventory?.(jsonResponse(bottles));
-    });
-    expect(result.current.items[0]?.bottleNotes).toBe("Newer fact");
-  });
-
-  it("ignores an older load failure after a newer refresh succeeds", async () => {
-    let rejectInitialInventory: ((error: Error) => void) | undefined;
-    let requestedInventory = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles" && !requestedInventory) {
-          requestedInventory = true;
-          return new Promise<Response>((_resolve, reject) => {
-            rejectInitialInventory = reject;
-          });
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(requestedInventory).toBe(true);
-    });
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Bottle saved.",
-      });
-    });
-    await act(async () => {
-      rejectInitialInventory?.(new Error("An older request lost its connection"));
-    });
-
-    expect(result.current.items).toHaveLength(1);
-    expect(result.current.refreshIssues).toEqual([]);
-    expect(result.current.status).toBe("Bottle saved.");
-  });
-
-  it("does not clear a newer refresh failure when an older load finishes", async () => {
-    let resolveInitialInventory: ((response: Response) => void) | undefined;
-    let requestedInventory = false;
-    let failSites = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottles" && !requestedInventory) {
-          requestedInventory = true;
-          return new Promise<Response>((resolve) => {
-            resolveInitialInventory = resolve;
-          });
-        }
-        return path === "/api/sites" && failSites
-          ? new Response(null, { status: 503 })
-          : jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(requestedInventory).toBe(true);
-    });
-    failSites = true;
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Bottle saved.",
-      });
-    });
-    await act(async () => {
-      resolveInitialInventory?.(jsonResponse(bottles));
-    });
-
-    expect(result.current.refreshIssues).toEqual([
-      {
-        collection: "sites",
-        message: "Sites could not be refreshed. Try again.",
-      },
-    ]);
-  });
-
-  it("ignores an older polling failure after a catalogue refresh succeeds", async () => {
+  it("limits a polling tick to 100 IDs and rotates through known work", async () => {
     vi.useFakeTimers();
-    let captureRequests = 0;
-    let rejectPoll: ((error: Error) => void) | undefined;
+    const batches: string[][] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottle-captures") {
-          captureRequests += 1;
-          if (captureRequests === 2) {
-            return new Promise<Response>((_resolve, reject) => {
-              rejectPoll = reject;
-            });
-          }
-          return jsonResponse(captures.map((capture) => ({ ...capture, status: "extracting" })));
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
-    expect(captureRequests).toBe(2);
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Bottle saved.",
-      });
-    });
-    await act(async () => {
-      rejectPoll?.(new Error("An older polling request lost its connection"));
-    });
-
-    expect(result.current.refreshIssues).toEqual([]);
-    expect(result.current.status).toBe("Bottle saved.");
-  });
-
-  it("offers a retry after the initial catalogue load fails", async () => {
-    let unavailable = true;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) =>
-        unavailable
-          ? new Response(null, { status: 503 })
-          : jsonResponse(dataByPath.get(requestPath(input)) ?? []),
-      ),
-    );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.refreshIssues.map((issue) => issue.collection).toSorted()).toEqual([
-        "captures",
-        "inventory",
-        "locations",
-        "sites",
-        "wines",
-      ]);
-    });
-
-    unavailable = false;
-    await act(async () => {
-      await result.current.retryRefresh();
-    });
-
-    expect(result.current.items).toHaveLength(1);
-    expect(result.current.refreshIssues).toEqual([]);
-  });
-
-  it("refreshes pending captures, updates imported inventory, and stops after processing finishes", async () => {
-    vi.useFakeTimers();
-    let captureStatus = "queued";
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        requests.push(path);
-        return jsonResponse(
-          path === "/api/bottle-captures"
-            ? captures.map((capture) => ({ ...capture, status: captureStatus }))
-            : (dataByPath.get(path) ?? []),
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+          window.location.origin,
         );
+        if (url.pathname === "/api/bottle-capture-statuses") {
+          const ids = url.searchParams.getAll("captureId");
+          batches.push(ids);
+          return response({
+            data: ids.map((id) => ({
+              id,
+              status: "extracting",
+              updatedAt: "now",
+              errorMessage: null,
+            })),
+          });
+        }
+        return fixture(input);
       }),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result } = renderHook(() => useCatalogue(auth));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(result.current.captures[0]?.status).toBe("queued");
-    requests.length = 0;
-
-    captureStatus = "extracting";
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
+    act(() => {
+      for (let id = 0; id < 150; id += 1) result.current.trackPendingCapture(String(id));
     });
-    expect(requests).toEqual(["/api/bottle-captures"]);
-    expect(result.current.captures[0]?.status).toBe("extracting");
-
-    captureStatus = "imported";
-    requests.length = 0;
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
     });
-    expect(requests).toContain("/api/bottles");
-    expect(result.current.captures[0]?.status).toBe("imported");
-    expect(result.current.status).toBe("Capture imported. Inventory updated.");
-
-    requests.length = 0;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
-    });
-    expect(requests).toEqual([]);
+    expect(batches).toHaveLength(2);
+    expect(batches.every((batch) => batch.length === 100)).toBe(true);
+    expect(new Set(batches.flat()).size).toBe(150);
   });
-
-  it("retains pending captures through temporary polling failure and clears the warning on recovery", async () => {
+  it("changing inventory filters retains known work and does not reload the shared directories", async () => {
     vi.useFakeTimers();
-    let unavailable = false;
+    const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        if (path === "/api/bottle-captures") {
-          return unavailable
-            ? new Response(null, { status: 503 })
-            : jsonResponse(captures.map((capture) => ({ ...capture, status: "extracting" })));
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
+        requests.push(pathOf(input));
+        return fixture(input);
       }),
     );
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
+    const { result, rerender } = renderHook(
+      ({ path }) => useCatalogue(auth, { ...inventoryOptions, inventoryPath: path }),
+      { initialProps: { path: "/api/bottles?limit=50" } },
+    );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-
-    unavailable = true;
+    act(() => {
+      result.current.trackPendingCapture("pending-before-filter");
+    });
+    requests.length = 0;
+    rerender({ path: "/api/bottles?limit=50&query=Shiraz" });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
-    expect(result.current.captures[0]?.status).toBe("extracting");
-    expect(result.current.refreshIssues).toContainEqual({
-      collection: "captures",
-      message: "Captures could not be refreshed. Try again.",
+    expect(requests).toContain("/api/bottle-capture-statuses");
+    expect(requests).not.toContain("/api/sites");
+    expect(requests).not.toContain("/api/storage-locations");
+  });
+  it("a known import refreshes the current query after filters change during its compact poll", async () => {
+    vi.useFakeTimers();
+    let resolveStatus: ((response: Response) => void) | undefined;
+    const requests: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+          window.location.origin,
+        );
+        requests.push(url);
+        if (url.pathname === "/api/bottle-capture-statuses")
+          return new Promise<Response>((resolve) => {
+            resolveStatus = resolve;
+          });
+        return fixture(input);
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ path }) => useCatalogue(auth, { ...inventoryOptions, inventoryPath: path }),
+      { initialProps: { path: "/api/bottles?query=old" } },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
-
-    unavailable = false;
+    act(() => {
+      result.current.trackPendingCapture("tracked");
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
-    expect(result.current.refreshIssues).toEqual([]);
-  });
-
-  it("keeps a committed mutation successful and retries only its failed refresh", async () => {
-    let failedPath: string | null = null;
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        requests.push(path);
-        if (path === failedPath) {
-          return new Response(null, { status: 503 });
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.items).toHaveLength(1);
-    });
-
-    failedPath = "/api/sites";
+    expect(resolveStatus).toBeDefined();
+    rerender({ path: "/api/bottles?query=new" });
     await act(async () => {
-      await result.current.completeMutation({
-        refresh: "catalogue",
-        successMessage: "Bottle saved.",
-      });
+      await vi.advanceTimersByTimeAsync(0);
     });
-
-    expect(result.current.status).toBe("Bottle saved. Latest data could not be refreshed.");
-    expect(result.current.refreshIssues).toEqual([
-      {
-        collection: "sites",
-        message: "Sites could not be refreshed. Try again.",
-      },
-    ]);
-
-    failedPath = null;
-    requests.length = 0;
     await act(async () => {
-      await result.current.retryRefresh();
+      resolveStatus?.(
+        response({
+          data: [{ id: "tracked", status: "imported", updatedAt: "later", errorMessage: null }],
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
     });
-
-    expect(requests).toEqual(["/api/sites"]);
-    expect(result.current.refreshIssues).toEqual([]);
-    expect(result.current.status).toBe("Latest data refreshed.");
-  });
-
-  it("limits capture recovery to capture data and retains a retry after repeated failure", async () => {
-    let failCaptures = false;
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const path = requestPath(input);
-        requests.push(path);
-        if (failCaptures && path === "/api/bottle-captures") {
-          return new Response(null, { status: 503 });
-        }
-        return jsonResponse(dataByPath.get(path) ?? []);
-      }),
-    );
-
-    const { result } = renderHook(() => useCatalogue(getAuthHeaders));
-    await waitFor(() => {
-      expect(result.current.captures).toHaveLength(1);
-    });
-
-    failCaptures = true;
-    requests.length = 0;
-    await act(async () => {
-      await result.current.completeMutation({
-        refresh: "captures",
-        successMessage: "Capture deleted.",
-      });
-    });
-
-    expect(requests).toEqual(["/api/bottle-captures"]);
-    expect(result.current.refreshIssues).toContainEqual({
-      collection: "captures",
-      message: "Captures could not be refreshed. Try again.",
-    });
-
-    requests.length = 0;
-    await act(async () => {
-      await result.current.retryRefresh();
-    });
-
-    expect(requests).toEqual(["/api/bottle-captures"]);
-    expect(result.current.refreshIssues).toContainEqual({
-      collection: "captures",
-      message: "Captures could not be refreshed. Try again.",
-    });
-    expect(result.current.status).toBe("Latest data is still unavailable. Try refreshing again.");
+    expect(
+      requests.filter(
+        (request) =>
+          request.pathname === "/api/bottles" && request.searchParams.get("query") === "new",
+      ),
+    ).toHaveLength(2);
+    expect(
+      requests.filter(
+        (request) =>
+          request.pathname === "/api/bottles" && request.searchParams.get("query") === "old",
+      ),
+    ).toHaveLength(1);
   });
 });
-
-function requestPath(input: string | URL | Request): string {
-  if (input instanceof Request) {
-    return new URL(input.url, window.location.origin).pathname;
-  }
-  return new URL(String(input), window.location.origin).pathname;
-}
-
-function jsonResponse(data: readonly unknown[]): Response {
-  return new Response(JSON.stringify({ data }), {
-    headers: { "content-type": "application/json" },
-    status: 200,
-  });
-}

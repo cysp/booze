@@ -19,13 +19,8 @@ import {
   type ReviewSourceResource,
 } from "../api/critic-reviews.ts";
 import { resolveWineVintageId } from "./catalogue.ts";
-import {
-  decodePageCursor,
-  pageFromRows,
-  rowsAfterCursor,
-  toolJson,
-  type Page,
-} from "./pagination.ts";
+import { decodePageCursor, pageFromRows, rowsAfterCursor, type Page } from "../read-pagination.ts";
+import { toolJson } from "./pagination.ts";
 import {
   createReviewSourceInputSchema,
   createReviewSourceOutputSchema,
