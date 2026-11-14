@@ -37,6 +37,7 @@ type AppProps = {
 };
 
 type CatalogueProps = {
+  readonly additionScope: string;
   readonly authMode: AuthMode;
   readonly authControl: ReactElement;
   readonly getAuthHeaders: () => Promise<Record<string, string>>;
@@ -90,7 +91,12 @@ export function App({ authMode }: AppProps): ReactElement {
   }, [authMode]);
 
   return (
-    <Catalogue authControl={<></>} authMode={authMode} getAuthHeaders={getDevelopmentAuthHeaders} />
+    <Catalogue
+      additionScope="development"
+      authControl={<></>}
+      authMode={authMode}
+      getAuthHeaders={getDevelopmentAuthHeaders}
+    />
   );
 }
 
@@ -104,7 +110,12 @@ function uniqueSorted(values: readonly string[]): readonly string[] {
   );
 }
 
-export function Catalogue({ authMode, authControl, getAuthHeaders }: CatalogueProps): ReactElement {
+export function Catalogue({
+  additionScope,
+  authMode,
+  authControl,
+  getAuthHeaders,
+}: CatalogueProps): ReactElement {
   const {
     captures,
     wines,
@@ -145,6 +156,7 @@ export function Catalogue({ authMode, authControl, getAuthHeaders }: CataloguePr
     setVarietalFilter,
   } = useCatalogueUrlState();
   const bottleController = useBottleController({
+    additionScope,
     completeMutation,
     getAuthHeaders,
     locations,
@@ -152,6 +164,7 @@ export function Catalogue({ authMode, authControl, getAuthHeaders }: CataloguePr
     writableSites,
   });
   const captureController = useCaptureController({
+    additionScope,
     completeMutation,
     getAuthHeaders,
     setStatus,
@@ -373,6 +386,7 @@ export function Catalogue({ authMode, authControl, getAuthHeaders }: CataloguePr
                 onSaveReview={captureController.saveCaptureReview}
                 onRetry={captureController.retryCapture}
                 onSubmit={captureController.submitCapture}
+                onCancelAddition={captureController.cancelAddition}
               />
             ) : (
               <ManagementArea
@@ -396,9 +410,7 @@ export function Catalogue({ authMode, authControl, getAuthHeaders }: CataloguePr
                 locations={writableLocations}
                 sites={writableSites}
                 title="Add bottle"
-                onClose={() => {
-                  bottleController.setIsAddOpen(false);
-                }}
+                onClose={bottleController.cancelAddition}
                 onSubmit={bottleController.saveBottle}
               />
             ) : null}

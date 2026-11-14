@@ -1,3 +1,4 @@
+import { createBottleCapture } from "./capture-intake.ts";
 // oxlint-disable import/max-dependencies -- Exercises capture lifecycle races across HTTP, Workflow claims, and D1 transactions.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -9,14 +10,15 @@ import { Hono } from "hono";
 import { problemResponseForError } from "./api/http.ts";
 import { userIdForClerkUser } from "./api/ids.ts";
 import type { Bindings } from "./api/types.ts";
-import { importBottleCandidate } from "./bottle-importer.ts";
+import { importBottleCandidate, importReviewedCapture } from "./bottle-importer.ts";
 import {
   beginCaptureWorkflow,
-  createBottleCapture,
   reserveCaptureRetry,
+  saveCaptureReview,
   updateCaptureStatus,
 } from "./capture-store.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
+import { multipartBucket } from "./multipart-support.ts";
 import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
 
 const candidate = {
@@ -32,9 +34,8 @@ await describe("capture lifecycle recovery", async () => {
   await it("persists the initial Workflow owner before storing capture images", async () => {
     const sqlite = setup();
     let storedImages = 0;
-    // oxlint-disable typescript/no-unsafe-type-assertion -- Capture creation only writes objects to this bucket.
-    const bucket = {
-      async put() {
+    const { bucket } = multipartBucket({
+      beforePart() {
         const capture = sqlite
           .prepare("SELECT id, workflow_instance_id FROM bottle_captures")
           .get();
@@ -42,13 +43,12 @@ await describe("capture lifecycle recovery", async () => {
         assert.equal(capture["workflow_instance_id"], capture["id"]);
         storedImages += 1;
       },
-    } as unknown as R2Bucket;
-    // oxlint-enable typescript/no-unsafe-type-assertion
+    });
     const capture = await createBottleCapture({
       bucket,
+      operationId: crypto.randomUUID(),
       database: createD1Client(asD1(sqlite)),
       files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
       positionHint: null,
       quantity: 1,
       siteId: "site",
@@ -86,6 +86,7 @@ await describe("capture lifecycle recovery", async () => {
         data: {
           captureId,
           workflowInstanceId: null,
+          intakeComplete: true,
           errorMessage:
             "Capture was saved, but extraction startup could not be confirmed. Refresh capture status before retrying.",
         },
@@ -344,6 +345,189 @@ await describe("capture lifecycle recovery", async () => {
     assertNoImport(sqlite);
   });
 
+  await it("keeps manual preparation reviewable if execution stops before the batch", async () => {
+    const sqlite = setup("needs_review");
+    const d1 = asD1(sqlite);
+    const interrupted = new Error("Execution stopped before import batch");
+    d1.batch = async () => {
+      assert.equal(captureStatus(sqlite), "needs_review");
+      throw interrupted;
+    };
+    await assert.rejects(
+      importReviewedCapture({ ...automaticInput(d1), expectedReviewRevision: 0 }),
+      (error: unknown) => error === interrupted,
+    );
+    assert.equal(captureStatus(sqlite), "needs_review");
+    assertNoImport(sqlite);
+  });
+
+  await it("retains a manual candidate after a proven transaction rollback and supports retry", async () => {
+    const sqlite = setup("needs_review");
+    sqlite.exec(`CREATE TRIGGER fail_bottle BEFORE INSERT ON bottles
+      BEGIN SELECT RAISE(ABORT, 'injected bottle failure'); END`);
+    const d1 = asD1(sqlite);
+    assert.equal((await request(d1, "/bottle-captures/capture/import")).status, 500);
+    assert.equal(captureStatus(sqlite), "needs_review");
+    assert.equal(
+      sqlite.prepare("SELECT status FROM bottle_capture_runs").get()?.["status"],
+      "needs_review",
+    );
+    assertNoImport(sqlite);
+    sqlite.exec("DROP TRIGGER fail_bottle");
+    assert.equal((await request(d1, "/bottle-captures/capture/import")).status, 200);
+  });
+
+  await it("aborts the entire manual import if saved corrections change during preparation", async () => {
+    const sqlite = setup("needs_review");
+    const reviewed = JSON.stringify({ ...candidate, bottle: { notes: "New correction" } });
+    const d1 = beforeFirstBatch(sqlite, () => {
+      sqlite
+        .prepare("UPDATE bottle_captures SET review_revision = 1, review_candidate_json = ?")
+        .run(reviewed);
+    });
+    const response = await request(d1, "/bottle-captures/capture/import");
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal(captureStatus(sqlite), "needs_review");
+    assert.equal(
+      sqlite.prepare("SELECT review_candidate_json FROM bottle_captures").get()?.[
+        "review_candidate_json"
+      ],
+      reviewed,
+    );
+    assertNoImport(sqlite);
+  });
+
+  await it("allows saving corrections during manual preparation and rejects the stale import", async () => {
+    const sqlite = setup("needs_review");
+    const d1 = asD1(sqlite);
+    const batch = d1.batch.bind(d1);
+    let correctionsSaved = false;
+    d1.batch = async (statements) => {
+      assert.equal(
+        await saveCaptureReview({
+          captureId: "capture",
+          database: createD1Client(asD1(sqlite)),
+          expectedRevision: 0,
+          candidate: {
+            wine: { wineryName: "Corrected Producer", designation: "Reserve" },
+            bottle: {},
+          },
+        }),
+        1,
+      );
+      correctionsSaved = true;
+      return batch(statements);
+    };
+    const response = await request(d1, "/bottle-captures/capture/import");
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal(correctionsSaved, true);
+    assert.equal(captureStatus(sqlite), "needs_review");
+    assertNoImport(sqlite);
+  });
+
+  await it("aborts manual import after a newer run or deletion during preparation", async () => {
+    for (const change of ["run", "delete"]) {
+      const sqlite = setup("needs_review");
+      const d1 = beforeFirstBatch(sqlite, () => {
+        if (change === "run") {
+          sqlite.exec(`INSERT INTO bottle_capture_runs
+            (id, capture_id, status, extractor_version, prompt_version, schema_version, attempt_number)
+            VALUES ('new-run', 'capture', 'needs_review', 'v2', 'v2', 'v2', 2)`);
+        } else {
+          sqlite.exec("DELETE FROM bottle_capture_runs; DELETE FROM bottle_captures");
+        }
+      });
+      assert.equal((await request(d1, "/bottle-captures/capture/import")).status, 409);
+      assert.equal(captureStatus(sqlite), change === "run" ? "needs_review" : undefined);
+      assertNoImport(sqlite);
+    }
+  });
+
+  await it("returns one receipt and one inventory effect for two manual imports", async () => {
+    const sqlite = setup("needs_review");
+    const d1 = asD1(sqlite);
+    const responses = await Promise.all([
+      request(d1, "/bottle-captures/capture/import"),
+      request(d1, "/bottle-captures/capture/import"),
+    ]);
+    assert.deepEqual(
+      responses.map((response) => response.status),
+      [200, 200],
+    );
+    assert.deepEqual(await responses[0]?.json(), await responses[1]?.json());
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 2);
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM wine_vintages").get()?.["count"], 1);
+  });
+
+  await it("uses the current capture destination when a location is deleted during preparation", async () => {
+    const sqlite = setup("needs_review");
+    sqlite.exec(`INSERT INTO storage_locations (id, site_id, name) VALUES ('location', 'site', 'Rack');
+      UPDATE bottle_captures SET storage_location_id = 'location', position_hint = 'A1'`);
+    const d1 = beforeFirstBatch(sqlite, () => {
+      sqlite.exec(`UPDATE bottle_captures SET storage_location_id = NULL;
+        DELETE FROM storage_locations WHERE id = 'location'`);
+    });
+    const response = await request(d1, "/bottle-captures/capture/import");
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 2);
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM bottle_locations").get()?.["count"],
+      0,
+    );
+  });
+
+  await it("atomically rejects a selected wine moved outside the capture site during preparation", async () => {
+    const sqlite = setup("needs_review");
+    sqlite.exec(`INSERT INTO sites (id, name) VALUES ('other', 'Other');
+      INSERT INTO wine_vintages (id, site_id, base_name, display_name, vintage_label) VALUES ('vintage', 'site', 'Wine', 'Wine', 'NV')`);
+    const d1 = beforeFirstBatch(sqlite, () => {
+      sqlite.exec("UPDATE wine_vintages SET site_id = 'other' WHERE id = 'vintage'");
+    });
+    const response = await request(d1, "/bottle-captures/capture/import", undefined, {
+      wineVintageId: "vintage",
+    });
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal(captureStatus(sqlite), "needs_review");
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+    assert.equal(
+      sqlite.prepare("SELECT import_result_json FROM bottle_capture_runs").get()?.[
+        "import_result_json"
+      ],
+      null,
+    );
+  });
+
+  await it("returns the durable manual receipt after a lost commit acknowledgement", async () => {
+    const sqlite = setup("needs_review");
+    const d1 = asD1(sqlite);
+    const batch = d1.batch.bind(d1);
+    let writes = 0;
+    d1.batch = async (statements) => {
+      writes += 1;
+      await batch(statements);
+      throw new Error("Manual import commit acknowledgement lost");
+    };
+    const response = await request(d1, "/bottle-captures/capture/import");
+    assert.equal(response.status, 200, await response.clone().text());
+    const replay = await request(d1, "/bottle-captures/capture/import");
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), await response.json());
+    assert.equal(writes, 1);
+    assert.equal(captureStatus(sqlite), "imported");
+    assert.equal(
+      sqlite.prepare("SELECT status FROM bottle_capture_runs").get()?.["status"],
+      "imported",
+    );
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 2);
+  });
+
+  await it("preserves historical manual importing rows without guessing recovery", async () => {
+    const sqlite = setup("importing");
+    assert.equal((await request(asD1(sqlite), "/bottle-captures/capture/import")).status, 409);
+    assert.equal(captureStatus(sqlite), "importing");
+    assertNoImport(sqlite);
+  });
+
   await it("keeps an invalid candidate reviewable and lets the user select an existing wine", async () => {
     const sqlite = setup("needs_review");
     const invalidCandidate = {
@@ -533,22 +717,11 @@ async function request(
 }
 
 async function uploadCapture(sqlite: DatabaseSync, start: (id: string) => Promise<void>) {
-  const objects = new Map<string, ArrayBuffer>();
-  // oxlint-disable typescript/no-unsafe-type-assertion -- These external bindings implement only the upload, image-read, deletion, and Workflow-launch operations used by the routes.
+  const { bucket, objects } = multipartBucket();
+  // oxlint-disable typescript/no-unsafe-type-assertion -- These external bindings implement the capture and Workflow operations exercised by the routes.
   const bindings = {
     DB: asD1(sqlite),
-    IMAGE_BUCKET: {
-      async put(key: string, bytes: ArrayBuffer) {
-        objects.set(key, bytes);
-      },
-      async get(key: string) {
-        const body = objects.get(key);
-        return body === undefined ? null : { body };
-      },
-      async delete(keys: string[]) {
-        for (const key of keys) objects.delete(key);
-      },
-    },
+    IMAGE_BUCKET: bucket,
     BOTTLE_CAPTURE_WORKFLOW: {
       async create({ id }: { readonly id: string }) {
         await start(id);
@@ -558,6 +731,7 @@ async function uploadCapture(sqlite: DatabaseSync, start: (id: string) => Promis
   } as unknown as Bindings;
   // oxlint-enable typescript/no-unsafe-type-assertion
   const body = new FormData();
+  body.set("operationId", crypto.randomUUID());
   body.set("siteId", "site");
   body.set("quantity", "1");
   body.set("images", new File(["photo"], "label.jpg", { type: "image/jpeg" }));

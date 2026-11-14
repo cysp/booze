@@ -382,7 +382,6 @@ export const imageAssets = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.id] }),
     index("image_assets_site_id_idx").on(table.siteId),
-    uniqueIndex("image_assets_site_id_sha256_unique").on(table.siteId, table.sha256),
     uniqueIndex("image_assets_r2_key_unique").on(table.r2Key),
   ],
 );
@@ -418,6 +417,31 @@ export const bottleCaptures = sqliteTable(
       foreignColumns: [storageLocations.siteId, storageLocations.id],
       name: "bottle_captures_site_id_storage_location_id_locations_fk",
     }),
+  ],
+);
+
+// Reserves each original's immutable key before R2 can commit it. The upload
+// ID is registered here before parts are sent, and survives retries/deletion.
+export const captureImageUploads = sqliteTable(
+  "capture_image_uploads",
+  {
+    captureId: text("capture_id")
+      .notNull()
+      .references(() => bottleCaptures.id),
+    sortOrder: integer("sort_order").notNull(),
+    writeId: text("write_id").notNull(),
+    r2Key: text("r2_key").notNull(),
+    uploadId: text("upload_id"),
+    sha256: text("sha256").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    originalFilename: text("original_filename"),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+  },
+  (table) => [
+    primaryKey({ columns: [table.captureId, table.sortOrder] }),
+    uniqueIndex("capture_image_uploads_write_id_unique").on(table.writeId),
+    uniqueIndex("capture_image_uploads_r2_key_unique").on(table.r2Key),
   ],
 );
 
@@ -534,6 +558,7 @@ export const r2ObjectDeletionQueue = sqliteTable(
     r2Key: text("r2_key").notNull(),
     sourceKind: text("source_kind").notNull(),
     sourceId: text("source_id").notNull(),
+    multipartUploadId: text("multipart_upload_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
     lastAttemptAt: text("last_attempt_at"),
@@ -543,4 +568,20 @@ export const r2ObjectDeletionQueue = sqliteTable(
     primaryKey({ columns: [table.r2Key] }),
     index("r2_object_deletion_queue_attempts_created_at_idx").on(table.attempts, table.createdAt),
   ],
+);
+
+// Durable addition identity outlives catalogue deletion. Opaque user/site IDs have
+// no foreign keys: replay must never recreate deliberately deleted catalogue rows.
+export const additionReceipts = sqliteTable(
+  "addition_receipts",
+  {
+    userId: text("user_id").notNull(),
+    kind: text("kind", { enum: ["bottles", "capture"] }).notNull(),
+    operationId: text("operation_id").notNull(),
+    siteId: text("site_id").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    resultJson: text("result_json").notNull(),
+    createdAt: text("created_at").notNull().default(currentTimestamp),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.kind, table.operationId] })],
 );
