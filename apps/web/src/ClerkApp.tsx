@@ -17,7 +17,7 @@ export function ClerkApp({ publishableKey }: { readonly publishableKey: string }
 }
 
 function ClerkCatalogue(): ReactElement {
-  const { getToken } = useAuth();
+  const { getToken, userId } = useAuth();
   const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
     const token = await getToken();
     if (token === null) {
@@ -26,7 +26,13 @@ function ClerkCatalogue(): ReactElement {
     return { authorization: `Bearer ${token}` };
   }, [getToken]);
 
+  if (userId === null || userId === undefined) return <></>;
   return (
-    <Catalogue authControl={<UserButton />} authMode="clerk" getAuthHeaders={getAuthHeaders} />
+    <Catalogue
+      additionScope={userId}
+      authControl={<UserButton />}
+      authMode="clerk"
+      getAuthHeaders={getAuthHeaders}
+    />
   );
 }

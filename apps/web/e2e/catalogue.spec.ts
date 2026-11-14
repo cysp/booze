@@ -177,7 +177,11 @@ async function mockCommittedMutationWithStaleRefresh(
       }
       await route.fulfill({
         body:
-          method === "POST" ? JSON.stringify({ data: { errorMessage: null } }) : JSON.stringify({}),
+          method === "POST"
+            ? JSON.stringify({
+                data: { captureId: "submitted-capture", errorMessage: null, intakeComplete: true },
+              })
+            : JSON.stringify({}),
         contentType: "application/json",
         status: 200,
       });

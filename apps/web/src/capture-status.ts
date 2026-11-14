@@ -8,6 +8,7 @@ type CaptureStatusMeta = {
 };
 
 const captureStatusMeta = {
+  uploading: { actionable: false, badge: "info", deletable: true, label: "Uploading" },
   queued: { actionable: false, badge: "neutral", deletable: false, label: "Queued" },
   extracting: { actionable: false, badge: "info", deletable: false, label: "Extracting" },
   importing: { actionable: false, badge: "info", deletable: false, label: "Importing" },

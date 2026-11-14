@@ -275,7 +275,10 @@ async function request(database: D1Database, path: string, payload: Record<strin
     {
       method: "POST",
       headers: { "content-type": "application/json", "x-dev-user": "tester" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...(path === "/bottles" ? { operationId: crypto.randomUUID() } : {}),
+        ...payload,
+      }),
     },
     bindings,
   );

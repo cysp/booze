@@ -41,6 +41,7 @@ type CaptureAreaProps = {
   readonly sites: readonly SiteItem[];
   readonly writableSiteIds: ReadonlySet<string>;
   readonly setForm: (form: CaptureFormState) => void;
+  readonly onCancelAddition?: (siteId: string) => void;
   readonly onDelete: (captureId: string) => Promise<boolean>;
   readonly onImport: CaptureImportAction;
   readonly onSaveReview: CaptureReviewSaveAction;
@@ -52,6 +53,7 @@ type CaptureAreaProps = {
 };
 
 export type CaptureSubmitResult =
+  | { readonly kind: "pending"; readonly message: string }
   | {
       readonly kind: "submitted";
       readonly message: string;
@@ -75,6 +77,7 @@ export function CaptureArea({
   writableSiteIds,
   setForm,
   onDelete,
+  onCancelAddition,
   onImport,
   onSaveReview,
   onRetry,
@@ -114,7 +117,7 @@ export function CaptureArea({
     }
     const result = await onSubmit(form, files);
     setSubmitResult(result);
-    if (result.kind !== "failed") {
+    if (result.kind === "submitted" || result.kind === "saved_with_error") {
       setFiles([]);
     }
   }
@@ -258,6 +261,19 @@ export function CaptureArea({
               type="submit"
               variant="primary"
             />
+            {submitResult === null ||
+            (submitResult.kind !== "pending" && submitResult.kind !== "failed") ||
+            onCancelAddition === undefined ? null : (
+              <Button
+                label="Start another capture"
+                isDisabled={isSaving}
+                type="button"
+                onClick={() => {
+                  onCancelAddition(form.siteId);
+                  setSubmitResult(null);
+                }}
+              />
+            )}
             {/* Submission outcomes are already announced by the app's persistent status region. */}
             {submitResult === null ? null : (
               <Banner

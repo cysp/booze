@@ -1,3 +1,6 @@
+// oxlint-disable import/max-dependencies -- Catalogue controllers coordinate domain payloads, durable addition identity, and mutation feedback.
+import { contentDigest } from "../shared/addition-operation.ts";
+import { PendingAdditionChangedError, useAdditionOperation } from "./useAdditionOperation.ts";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 import type {
@@ -32,6 +35,7 @@ import {
 import { useNamedResourceActions, type NamedResourceActions } from "./useNamedResourceActions.ts";
 
 type SharedControllerContext = {
+  readonly additionScope?: string;
   readonly completeMutation: (completion: MutationCompletion) => Promise<void>;
   readonly getAuthHeaders: () => Promise<Record<string, string>>;
   readonly setStatus: (status: string) => void;
@@ -39,6 +43,7 @@ type SharedControllerContext = {
 
 export type BottleController = {
   readonly addFormDefaults: FormState;
+  readonly cancelAddition: (siteId: string) => void;
   readonly deleteBottle: (bottleId: string) => Promise<boolean>;
   readonly editingBottle: InventoryItem | null;
   readonly editingForm: FormState | null;
@@ -58,6 +63,7 @@ export type BottleController = {
 
 export type CaptureController = {
   readonly captureForm: CaptureFormState;
+  readonly cancelAddition: (siteId: string) => void;
   readonly deleteCapture: (captureId: string) => Promise<boolean>;
   readonly importCapture: CaptureImportAction;
   readonly saveCaptureReview: CaptureReviewSaveAction;
@@ -85,6 +91,7 @@ export type SiteController = {
 };
 
 export function useBottleController({
+  additionScope = "development",
   completeMutation,
   getAuthHeaders,
   locations,
@@ -97,6 +104,11 @@ export function useBottleController({
   const [addFormDefaults, setAddFormDefaults] = useState<FormState>(initialFormState);
   const [editingBottle, setEditingBottle] = useState<InventoryItem | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const addition = useAdditionOperation("bottles", additionScope);
+  function cancelAddition(siteId: string): void {
+    addition.clear(siteId);
+    setIsAddOpen(false);
+  }
   const [isSaving, setIsSaving] = useState(false);
   const editingForm = editingBottle === null ? null : formStateForItem(editingBottle);
 
@@ -117,20 +129,27 @@ export function useBottleController({
     setIsSaving(true);
     setStatus("Saving bottle...");
     try {
-      const payload = bottleCreatePayload(submission);
+      const payload = {
+        ...bottleCreatePayload(submission),
+        siteId: form.siteId,
+        quantity: quantity.value,
+      };
+      const operationId = await addition.operationId(form.siteId, payload);
       const response = await fetch("/api/bottles", {
         method: "POST",
         headers: jsonHeaders(await getAuthHeaders()),
         body: JSON.stringify({
           ...payload,
-          siteId: form.siteId,
-          quantity: quantity.value,
+          operationId,
         }),
       });
       if (!response.ok) {
+        if ([400, 413, 415, 422].includes(response.status)) addition.clear(form.siteId);
         const message =
-          (await responseErrorMessage(response)) ??
-          "Bottle was not saved. Check the entered details.";
+          response.status >= 500
+            ? "The bottle save could not be confirmed. Your details are still here; retry without changing them to check the same addition."
+            : ((await responseErrorMessage(response)) ??
+              "Bottle was not saved. Check the entered details.");
         setStatus(message);
         return { message, ok: false };
       }
@@ -142,16 +161,24 @@ export function useBottleController({
         location: form.location,
         position: form.position,
       });
+      addition.clear(form.siteId);
       setIsAddOpen(false);
-      await completeMutation({ refresh: "catalogue", successMessage: "Bottle saved." });
-      return { ok: true };
-    } catch {
-      const message = "Bottle was not saved. Check your connection and try again.";
+    } catch (error) {
+      const message =
+        error instanceof PendingAdditionChangedError
+          ? error.message
+          : "The bottle save could not be confirmed. Your details are still here; retry without changing them to check the same addition.";
       setStatus(message);
       return { message, ok: false };
     } finally {
       setIsSaving(false);
     }
+    try {
+      await completeMutation({ refresh: "catalogue", successMessage: "Bottle saved." });
+    } catch {
+      setStatus("Bottle saved. Catalogue refresh failed; refresh to see the saved bottle.");
+    }
+    return { ok: true };
   }
 
   async function patchBottle({
@@ -237,6 +264,7 @@ export function useBottleController({
 
   return {
     addFormDefaults,
+    cancelAddition,
     deleteBottle,
     editingBottle,
     editingForm,
@@ -253,6 +281,7 @@ export function useBottleController({
 }
 
 export function useCaptureController({
+  additionScope = "development",
   completeMutation,
   getAuthHeaders,
   setStatus,
@@ -261,6 +290,7 @@ export function useCaptureController({
   readonly writableSites: readonly SiteItem[];
 }): CaptureController {
   const [captureForm, setCaptureForm] = useState<CaptureFormState>(initialCaptureFormState);
+  const addition = useAdditionOperation("capture", additionScope);
   const [isSaving, setIsSaving] = useState(false);
   useDefaultSite(writableSites, setCaptureForm);
 
@@ -280,29 +310,74 @@ export function useCaptureController({
     }
     setIsSaving(true);
     setStatus("Submitting capture...");
-    const formData = new FormData();
-    formData.append("siteId", form.siteId);
-    if (form.storageLocationId !== "") {
-      formData.append("storageLocationId", form.storageLocationId);
-    }
-    formData.append("positionHint", form.position);
-    formData.append("quantity", String(quantity.value));
-    for (const file of files) {
-      formData.append("images", file);
-    }
+    let savedResult: CaptureSubmitResult | undefined;
     try {
+      const operationId = await addition.operationId(form.siteId, {
+        siteId: form.siteId,
+        storageLocationId: form.storageLocationId || null,
+        positionHint: form.position,
+        quantity: quantity.value,
+        images: await Promise.all(
+          files.map(async (file) => ({
+            name: file.name,
+            contentType: file.type,
+            size: file.size,
+            digest: await contentDigest(await file.arrayBuffer()),
+          })),
+        ),
+      });
+      const formData = new FormData();
+      formData.append("operationId", operationId);
+      formData.append("siteId", form.siteId);
+      if (form.storageLocationId !== "") {
+        formData.append("storageLocationId", form.storageLocationId);
+      }
+      formData.append("positionHint", form.position);
+      formData.append("quantity", String(quantity.value));
+      for (const file of files) {
+        formData.append("images", file);
+      }
       const response = await fetch("/api/bottle-captures", {
         method: "POST",
         headers: await getAuthHeaders(),
         body: formData,
       });
       if (!response.ok) {
+        if ([400, 413, 415, 422].includes(response.status)) addition.clear(form.siteId);
         const message = await responseErrorMessage(response);
         const statusMessage =
-          message === null ? "Capture was not submitted." : `Capture failed: ${message}`;
+          response.status >= 500
+            ? "The capture submission could not be confirmed. Your photos are still here; retry without changing them to check the same capture."
+            : message === null
+              ? "Capture was not submitted."
+              : `Capture failed: ${message}`;
         setStatus(statusMessage);
         return { kind: "failed", message: statusMessage };
       }
+      let responsePayload: unknown;
+      try {
+        responsePayload = await response.json();
+      } catch {
+        const message =
+          "Capture is saved, but upload completion could not be confirmed. Keep these photos and retry the same capture.";
+        savedResult = { kind: "pending", message };
+        await completeMutation({ refresh: "captures", successMessage: message });
+        return savedResult;
+      }
+      const data = objectProperty(responsePayload, "data");
+      if (objectProperty(data, "intakeComplete") !== true) {
+        const message =
+          captureSubmitErrorMessage(responsePayload) ??
+          "Capture is saved, but its image upload is incomplete. Keep these photos and retry the same capture.";
+        savedResult = { kind: "pending", message };
+        await completeMutation({ refresh: "captures", successMessage: message });
+        return savedResult;
+      }
+      savedResult = {
+        kind: "submitted",
+        message: "Capture submitted. Extraction will run in the background.",
+      };
+      addition.clear(form.siteId);
       setCaptureForm({
         siteId: form.siteId,
         site: form.site,
@@ -311,25 +386,27 @@ export function useCaptureController({
         position: form.position,
         quantity: "1",
       });
-      let responsePayload: unknown;
-      try {
-        responsePayload = await response.json();
-      } catch {
-        const statusMessage = "Capture saved, but its processing state could not be read.";
-        await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
-        return { kind: "saved_with_error", message: statusMessage };
-      }
       const message = captureSubmitErrorMessage(responsePayload);
       if (message !== null) {
         const statusMessage = `Capture saved: ${message}`;
+        savedResult = { kind: "saved_with_error", message: statusMessage };
         await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
         return { kind: "saved_with_error", message: statusMessage };
       }
       const statusMessage = "Capture submitted. Extraction will run in the background.";
       await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
       return { kind: "submitted", message: statusMessage };
-    } catch {
-      const message = "Capture was not submitted. Check your connection and try again.";
+    } catch (error) {
+      if (savedResult !== undefined) {
+        setStatus(
+          `${savedResult.message} Catalogue refresh failed; refresh to see the saved capture.`,
+        );
+        return savedResult;
+      }
+      const message =
+        error instanceof PendingAdditionChangedError
+          ? error.message
+          : "The capture submission could not be confirmed. Your photos are still here; retry without changing them to check the same capture.";
       setStatus(message);
       return { kind: "failed", message };
     } finally {
@@ -447,6 +524,7 @@ export function useCaptureController({
 
   return {
     captureForm,
+    cancelAddition: addition.clear,
     deleteCapture,
     importCapture,
     isSaving,

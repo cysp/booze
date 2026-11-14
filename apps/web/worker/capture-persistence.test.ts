@@ -7,7 +7,6 @@ import { importBottleCandidate, matchBottleCandidate } from "./bottle-importer.t
 import {
   beginCaptureWorkflow,
   claimCaptureForImport,
-  createBottleCapture,
   createCaptureRun,
   getBottleCapture,
   getCaptureImageObject,
@@ -17,6 +16,8 @@ import {
   updateCaptureStatus,
 } from "./capture-store.ts";
 import { deleteBottleCaptureData, drainR2ObjectDeletionQueue } from "./deletion.ts";
+import { createBottleCapture } from "./capture-intake.ts";
+import { multipartBucket } from "./multipart-support.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 
 await describe("capture persistence", async () => {
@@ -96,7 +97,7 @@ await describe("capture persistence", async () => {
     assert.deepEqual(sqlite.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
-  await it("reserves one retry and rejects stale workflows and manual import claims", async () => {
+  await it("reserves one retry and rejects stale Workflow claims", async () => {
     const sqlite = seededDatabase();
     sqlite.exec(
       "INSERT INTO bottle_captures (id, site_id, user_id, status) VALUES ('capture', 'site', 'user', 'needs_review')",
@@ -158,23 +159,22 @@ await describe("capture persistence", async () => {
   await it("preserves a re-uploaded photo when an old deletion is retried", async () => {
     const sqlite = seededDatabase();
     const database = createD1Client(asD1(sqlite));
-    const { bucket, objects } = imageBucket();
+    const { bucket, objects } = multipartBucket();
     const input = {
       bucket,
       database,
       files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
       positionHint: null,
       quantity: 1,
       siteId: "site",
       storageLocationId: null,
       userId: "user",
     };
-    const first = await createBottleCapture(input);
+    const first = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     await updateCaptureStatus({ captureId: first.captureId, database, status: "failed" });
     const originalKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
     await deleteBottleCaptureData({ captureId: first.captureId, database: asD1(sqlite) });
-    const second = await createBottleCapture(input);
+    const second = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     assert.equal(second.status, "queued");
     const newKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
     assert.notEqual(newKey, originalKey);
@@ -183,45 +183,50 @@ await describe("capture persistence", async () => {
     assert.equal(objects.has(newKey), true);
   });
 
-  await it("deduplicates simultaneous photo uploads and cleans only the losing object", async () => {
+  await it("preserves separate photo lifetimes for simultaneous captures", async () => {
     const sqlite = seededDatabase();
     const database = createD1Client(asD1(sqlite));
-    const { bucket, objects } = imageBucket();
+    const { bucket, objects } = multipartBucket();
     const input = {
       bucket,
       database,
       files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
       positionHint: null,
       quantity: 1,
       siteId: "site",
       storageLocationId: null,
       userId: "user",
     };
-    const results = await Promise.all([createBottleCapture(input), createBottleCapture(input)]);
+    const results = await Promise.all([
+      createBottleCapture({ ...input, operationId: crypto.randomUUID() }),
+      createBottleCapture({ ...input, operationId: crypto.randomUUID() }),
+    ]);
     assert.deepEqual(
       results.map((result) => result.status),
       ["queued", "queued"],
     );
-    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM image_assets").get()?.["count"], 1);
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM image_assets").get()?.["count"], 2);
     assert.equal(
       sqlite.prepare("SELECT count(*) AS count FROM bottle_capture_images").get()?.["count"],
       2,
     );
     await drainR2ObjectDeletionQueue({ bucket, database: asD1(sqlite) });
-    const storedKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
-    assert.deepEqual([...objects.keys()], [storedKey]);
+    const storedKeys = sqlite
+      .prepare("SELECT r2_key FROM image_assets")
+      .all()
+      .map((row) => String(row["r2_key"]));
+    assert.deepEqual([...objects.keys()].toSorted(), storedKeys.toSorted());
   });
 
   await it("protects live photos referenced by legacy deletion queue entries", async () => {
     const sqlite = seededDatabase();
     const database = createD1Client(asD1(sqlite));
-    const { bucket, objects } = imageBucket();
+    const { bucket, objects } = multipartBucket();
     await createBottleCapture({
+      operationId: crypto.randomUUID(),
       bucket,
       database,
       files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
       positionHint: null,
       quantity: 1,
       siteId: "site",
@@ -245,12 +250,12 @@ await describe("capture persistence", async () => {
   await it("cannot delete a capture after processing has started", async () => {
     const sqlite = seededDatabase();
     const database = createD1Client(asD1(sqlite));
-    const { bucket } = imageBucket();
+    const { bucket } = multipartBucket();
     const capture = await createBottleCapture({
+      operationId: crypto.randomUUID(),
       bucket,
       database,
       files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
       positionHint: null,
       quantity: 1,
       siteId: "site",
@@ -395,8 +400,6 @@ await describe("capture persistence", async () => {
         quantity: 2,
         runId: "run",
         siteId: "site",
-        storageLocationId: null,
-        positionHint: null,
       }),
       /different wine/u,
     );
@@ -420,19 +423,4 @@ function seededDatabase() {
     "INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user'); INSERT INTO sites (id, name) VALUES ('site', 'Cellar')",
   );
   return database;
-}
-
-function imageBucket() {
-  const objects = new Map<string, unknown>();
-  // oxlint-disable typescript/no-unsafe-type-assertion -- Test double implements image storage and cleanup only.
-  const bucket = {
-    async put(key: string, value: unknown) {
-      objects.set(key, value);
-    },
-    async delete(keys: string | string[]) {
-      for (const key of typeof keys === "string" ? [keys] : keys) objects.delete(key);
-    },
-  } as unknown as R2Bucket;
-  // oxlint-enable typescript/no-unsafe-type-assertion
-  return { bucket, objects };
 }
