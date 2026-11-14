@@ -2,7 +2,6 @@ import {
   bottles,
   bottleLocations,
   grapeVarieties,
-  storageLocations,
   wineConstituents,
   wineries,
   wineVintages,
@@ -385,54 +384,7 @@ export function createBottleStatements({
   return { bottleIds: ids, statements: [first, ...rest] };
 }
 
-export async function upsertStorageLocation({
-  database,
-  siteId,
-  name,
-  locationType,
-  parentId = null,
-}: {
-  readonly database: BoozeDatabase;
-  readonly siteId: string;
-  readonly name: string;
-  readonly locationType?: string | undefined;
-  readonly parentId?: string | null | undefined;
-}): Promise<{ readonly storageLocationId: string }> {
-  const existing = await database
-    .select({ id: storageLocations.id })
-    .from(storageLocations)
-    .where(
-      and(
-        eq(storageLocations.siteId, siteId),
-        nullableEq(storageLocations.parentId, parentId),
-        eq(storageLocations.name, name),
-      ),
-    )
-    .limit(1);
-  const storageLocationId = existing[0]?.id ?? generatedId("loc");
-
-  if (existing[0] === undefined) {
-    await database.insert(storageLocations).values({
-      id: storageLocationId,
-      siteId,
-      parentId,
-      name,
-      locationType: locationType ?? "area",
-    });
-  } else {
-    await database
-      .update(storageLocations)
-      .set({ locationType, updatedAt: sql`CURRENT_TIMESTAMP` })
-      .where(eq(storageLocations.id, storageLocationId));
-  }
-
-  return { storageLocationId };
-}
-
-function nullableEq(
-  column: typeof wineries.region | typeof storageLocations.parentId,
-  value: string | null,
-) {
+function nullableEq(column: typeof wineries.region, value: string | null) {
   return value === null ? isNull(column) : eq(column, value);
 }
 

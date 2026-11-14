@@ -57,6 +57,23 @@ async function request(
 }
 
 await describe("storage location integrity", async () => {
+  await it("requires an explicit site ID without creating a default or named site", async () => {
+    const sqlite = cellar();
+    for (const body of [{ name: "Box" }, { siteName: "New site", name: "Box" }]) {
+      assert.equal((await request(sqlite, "POST", "/storage-locations", body)).status, 400);
+    }
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM sites").get()?.["count"], 1);
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM storage_locations").get()?.["count"],
+      2,
+    );
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM mcp_tool_audit_events").get()?.["count"],
+      0,
+    );
+    sqlite.close();
+  });
+
   await it("rejects self, descendant, missing, and cross-site parents without changing the hierarchy", async () => {
     const sqlite = cellar();
     sqlite.exec(

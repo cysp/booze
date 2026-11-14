@@ -1,11 +1,8 @@
-// oxlint-disable import/max-dependencies -- Tool registrar composes review persistence, authorization, audit, and schemas.
-import { criticReviews, type createD1Client } from "@chikachow/booze-db";
+import type { createD1Client } from "@chikachow/booze-db";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
-import { requireSitePermission } from "../api/auth.ts";
 import {
   createOrUpdateReviewSource,
   deleteCriticReview,
@@ -15,7 +12,6 @@ import {
   type CriticReviewFact,
   type ReviewSourceResource,
 } from "../api/critic-reviews.ts";
-import { createMcpToolAuditEventInsert } from "./audit.ts";
 import { resolveWineVintageId } from "./catalogue.ts";
 import { mcpEntityId } from "./ids.ts";
 import {
@@ -96,8 +92,7 @@ export function registerCriticReviewTools({
       outputSchema: createReviewSourceOutputSchema.shape,
     },
     async (input) => {
-      let changed = false;
-      const source = await createOrUpdateReviewSource({
+      const result = await createOrUpdateReviewSource({
         database,
         input: {
           isActive: input.isActive,
@@ -107,30 +102,13 @@ export function registerCriticReviewTools({
           sourceType: input.sourceType,
           url: input.url ?? undefined,
         },
+        source: "mcp",
         userId,
-        audit: ({ before, after }) => {
-          const beforeSummary = before === undefined ? {} : reviewSourceSummary(before);
-          const afterSummary = reviewSourceSummary(after);
-          changed = JSON.stringify(beforeSummary) !== JSON.stringify(afterSummary);
-          return createMcpToolAuditEventInsert({
-            auditEventId: crypto.randomUUID(),
-            database,
-            event: {
-              affectedRecordCount: changed ? 1 : 0,
-              after: afterSummary,
-              before: beforeSummary,
-              input,
-              siteId: input.siteId,
-              targetKind: "review_source",
-              targetMcpId: afterSummary.reviewSourceId,
-              targetPersistedId: after.id,
-              toolName: "cellar.create_review_source",
-              userId,
-            },
-          });
-        },
       });
-      return toolJson({ changed, reviewSource: reviewSourceSummary(source) });
+      return toolJson({
+        changed: result.affectedRecordCount !== 0,
+        reviewSource: reviewSourceSummary(result.after),
+      });
     },
   );
 
@@ -181,45 +159,13 @@ export function registerCriticReviewTools({
       outputSchema: deleteCriticReviewOutputSchema.shape,
     },
     async ({ criticReviewId }) => {
-      const persistedCriticReviewId = await resolveCriticReviewId({
-        criticReviewId,
+      const result = await deleteCriticReview({
         database,
+        reviewId: await resolveCriticReviewId({ criticReviewId, database, userId }),
+        source: "mcp",
         userId,
       });
-      const persistedReview = (await listCriticReviews({ database, userId })).find(
-        (review) => review.id === persistedCriticReviewId,
-      );
-      if (persistedReview === undefined) {
-        throw new HTTPException(404, { message: "Critic review not found" });
-      }
-      await requireSitePermission({
-        database,
-        permission: "site.content.write",
-        siteId: persistedReview.siteId,
-        userId,
-      });
-      const criticReview = criticReviewSummary(persistedReview);
-      const auditEventId = crypto.randomUUID();
-      await database.batch([
-        database.delete(criticReviews).where(eq(criticReviews.id, persistedCriticReviewId)),
-        createMcpToolAuditEventInsert({
-          auditEventId,
-          database,
-          event: {
-            affectedRecordCount: 1,
-            after: {},
-            before: criticReview,
-            input: { criticReviewId },
-            siteId: criticReview.siteId,
-            targetKind: "critic_review",
-            targetMcpId: criticReview.criticReviewId,
-            targetPersistedId: persistedCriticReviewId,
-            toolName: "cellar.delete_critic_review",
-            userId,
-          },
-        }),
-      ]);
-      return toolJson({ criticReview, deleted: true });
+      return toolJson({ criticReview: criticReviewSummary(result.before), deleted: true });
     },
   );
 }
@@ -238,8 +184,7 @@ async function upsertCriticReviewTool({
     input.reviewSourceId === undefined
       ? undefined
       : await resolveReviewSourceId({ database, reviewSourceId: input.reviewSourceId, userId });
-  let changed = false;
-  const storedReview = await upsertCriticReview({
+  const result = await upsertCriticReview({
     database,
     review: {
       notes: input.notes ?? undefined,
@@ -254,29 +199,12 @@ async function upsertCriticReviewTool({
     },
     userId,
     wineVintageId,
-    audit: ({ before, after }) => {
-      const beforeSummary = before === undefined ? {} : criticReviewSummary(before);
-      const afterSummary = criticReviewSummary(after);
-      changed = JSON.stringify(beforeSummary) !== JSON.stringify(afterSummary);
-      return createMcpToolAuditEventInsert({
-        auditEventId: crypto.randomUUID(),
-        database,
-        event: {
-          affectedRecordCount: changed ? 1 : 0,
-          after: afterSummary,
-          before: beforeSummary,
-          input: { wineId, ...input },
-          siteId: after.siteId,
-          targetKind: "critic_review",
-          targetMcpId: afterSummary.criticReviewId,
-          targetPersistedId: after.id,
-          toolName: "cellar.upsert_critic_review",
-          userId,
-        },
-      });
-    },
+    source: "mcp",
   });
-  return toolJson({ changed, criticReview: criticReviewSummary(storedReview) });
+  return toolJson({
+    changed: result.affectedRecordCount !== 0,
+    criticReview: criticReviewSummary(result.after),
+  });
 }
 
 export async function listReviewSourceSummaries({
@@ -309,37 +237,6 @@ export async function listReviewSourceSummaries({
   });
 }
 
-export async function createReviewSourceSummary({
-  database,
-  input,
-  userId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly input: {
-    readonly isActive: boolean;
-    readonly name: string;
-    readonly notes?: string | null | undefined;
-    readonly siteId: string;
-    readonly sourceType: string;
-    readonly url?: string | null | undefined;
-  };
-  readonly userId: string;
-}): Promise<z.infer<typeof reviewSourceSummarySchema>> {
-  const source = await createOrUpdateReviewSource({
-    database,
-    input: {
-      isActive: input.isActive,
-      name: input.name,
-      notes: input.notes ?? undefined,
-      siteId: input.siteId,
-      sourceType: input.sourceType,
-      url: input.url ?? undefined,
-    },
-    userId,
-  });
-  return reviewSourceSummary(source);
-}
-
 export async function listCriticReviewSummaries({
   database,
   input,
@@ -370,67 +267,6 @@ export async function listCriticReviewSummaries({
     }),
     toolName: listCriticReviewsToolName,
   });
-}
-
-export async function upsertCriticReviewSummary({
-  database,
-  input,
-  userId,
-  wineVintageId,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly input: {
-    readonly notes?: string | null | undefined;
-    readonly provenance?: string | null | undefined;
-    readonly ratingScale?: string | null | undefined;
-    readonly ratingText: string;
-    readonly ratingValue?: number | null | undefined;
-    readonly reviewSourceId?: string | undefined;
-    readonly reviewSourceName?: string | undefined;
-    readonly reviewedAt?: string | null | undefined;
-    readonly sourceUrl?: string | null | undefined;
-  };
-  readonly userId: string;
-  readonly wineVintageId: string;
-}): Promise<z.infer<typeof criticReviewSummarySchema>> {
-  const reviewSourceId =
-    input.reviewSourceId === undefined
-      ? undefined
-      : await resolveReviewSourceId({ database, reviewSourceId: input.reviewSourceId, userId });
-  const review = await upsertCriticReview({
-    database,
-    review: {
-      notes: input.notes ?? undefined,
-      provenance: input.provenance ?? undefined,
-      ratingScale: input.ratingScale ?? undefined,
-      ratingText: input.ratingText,
-      ratingValue: input.ratingValue ?? undefined,
-      reviewSourceId,
-      reviewSourceName: input.reviewSourceName,
-      reviewedAt: input.reviewedAt ?? undefined,
-      sourceUrl: input.sourceUrl ?? undefined,
-    },
-    userId,
-    wineVintageId,
-  });
-  return criticReviewSummary(review);
-}
-
-export async function deleteCriticReviewSummary({
-  criticReviewId,
-  database,
-  userId,
-}: {
-  readonly criticReviewId: string;
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly userId: string;
-}): Promise<z.infer<typeof criticReviewSummarySchema>> {
-  const review = await deleteCriticReview({
-    database,
-    reviewId: await resolveCriticReviewId({ criticReviewId, database, userId }),
-    userId,
-  });
-  return criticReviewSummary(review);
 }
 
 export async function resolveReviewSourceId({

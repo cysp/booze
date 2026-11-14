@@ -1,6 +1,7 @@
-import { siteMemberships, type BoozeDatabase } from "@chikachow/booze-db";
-import { sql, type SQL } from "drizzle-orm";
+import { mcpToolAuditEvents, siteMemberships, type BoozeDatabase } from "@chikachow/booze-db";
+import { eq, sql, type SQL } from "drizzle-orm";
 import type { BatchResponse } from "drizzle-orm/batch";
+import { z } from "zod";
 
 import {
   requireSitePermission,
@@ -75,4 +76,73 @@ export function operationConstraintFailed(error: unknown, constraint: string): b
     cause = cause.cause;
   }
   return false;
+}
+
+export const operationAuditResultSchema = z.object({
+  beforeJson: z.string(),
+  afterJson: z.string(),
+  affectedRecordCount: z.number().int().min(0),
+  targetPersistedId: z.string(),
+  siteId: z.string().nullable(),
+});
+
+type OperationAudit = {
+  readonly id: string;
+  readonly begin: OperationStatement;
+  readonly finish: (after: SQL, affectedRecordCount?: SQL) => OperationStatement;
+  readonly read: OperationStatement;
+};
+
+export function createOperationAudit({
+  context,
+  siteId,
+  action,
+  targetKind,
+  targetId,
+  input,
+  before,
+  condition = sql`1`,
+}: {
+  readonly context: OperationContext;
+  readonly siteId: string | SQL;
+  readonly action: string;
+  readonly targetKind: "bottle" | "critic_review" | "location" | "review_source" | "wine";
+  readonly targetId: string | SQL;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly before: SQL;
+  readonly condition?: SQL;
+}): OperationAudit {
+  const { database, userId, source } = context;
+  const id = crypto.randomUUID();
+  const toolName = source === "mcp" ? action : `http.${action}`;
+  return {
+    id,
+    begin: database.insert(mcpToolAuditEvents)
+      .select(sql`select ${id}, ${userId}, ${siteId}, ${toolName}, ${targetKind},
+      ${targetId}, ${targetId}, ${JSON.stringify({ ...input, source })}, coalesce(${before}, '{}'), '{}', 0, CURRENT_TIMESTAMP
+      where ${condition}`),
+    finish(after: SQL, affectedRecordCount?: SQL): OperationStatement {
+      const snapshot = sql`coalesce(${after}, '{}')`;
+      return database
+        .update(mcpToolAuditEvents)
+        .set({
+          afterJson: snapshot,
+          affectedRecordCount:
+            affectedRecordCount ??
+            sql`case when ${mcpToolAuditEvents.beforeJson} = ${snapshot} then 0 else 1 end`,
+        })
+        .where(eq(mcpToolAuditEvents.id, id));
+    },
+    read: database
+      .select({
+        beforeJson: mcpToolAuditEvents.beforeJson,
+        afterJson: mcpToolAuditEvents.afterJson,
+        affectedRecordCount: mcpToolAuditEvents.affectedRecordCount,
+        targetPersistedId: mcpToolAuditEvents.targetPersistedId,
+        siteId: mcpToolAuditEvents.siteId,
+      })
+      .from(mcpToolAuditEvents)
+      .where(eq(mcpToolAuditEvents.id, id))
+      .limit(1),
+  };
 }
