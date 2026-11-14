@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bottleCreatePayload, bottleEditPayload } from "./bottle-payload.ts";
+import { bottleCreatePayload, bottleEditPayload, bottleFormSubmission } from "./bottle-payload.ts";
 import { formStateForItem, locationLabel, siteLabel } from "./inventory-model.ts";
 import { inventoryItemFixture, locationsFixture, sitesFixture } from "./test/catalogue-fixtures.ts";
 
@@ -48,12 +48,14 @@ describe("structured resource to form submission", () => {
     expect(form.alcoholPercent).toBe("13.125");
     expect(form.bottleVolumeMl).toBe("1500");
     expect(form.grapeVarieties).toEqual(grapeVarieties);
-    const submission = { form, awards: [], criticReviews: [] };
+    const submission = { kind: "add" as const, form, awards: [], criticReviews: [] };
     expect(bottleCreatePayload(submission)).toMatchObject({
       wine: { grapeVarieties, alcoholPercent: 13.125 },
       bottle: { volumeMl: 1500 },
     });
-    expect(bottleEditPayload({ ...submission, wineEditScope: "shared" }, item)).toEqual({});
+    const correction = bottleFormSubmission({ kind: "correct-wine", item }, form, {}, "");
+    if (correction.kind === "add") throw new Error("Expected wine correction");
+    expect(bottleEditPayload(correction, item)).toEqual({});
   });
 
   it("trims draft entries and removes empty rows while preserving order, case and duplicates", () => {
@@ -62,7 +64,8 @@ describe("structured resource to form submission", () => {
       grapeVarieties: ["  Shiraz ", "", "  ", "Grenache", "Shiraz"],
     };
     expect(
-      bottleCreatePayload({ form, awards: [], criticReviews: [] }).wine?.grapeVarieties,
+      bottleCreatePayload({ kind: "add", form, awards: [], criticReviews: [] }).wine
+        ?.grapeVarieties,
     ).toEqual(["Shiraz", "Grenache", "Shiraz"]);
   });
 });

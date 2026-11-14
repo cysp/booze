@@ -205,6 +205,7 @@ export function useCatalogue(
     },
     [capturePage.refresh, inventory.refresh, loadLight, options.area],
   );
+  // A confirmed mutation stays successful; this module owns refresh failures and retry feedback.
   const completeMutation = useCallback(
     async ({ refresh: scope, successMessage }: MutationCompletion): Promise<void> => {
       statusVersion.current += 1;

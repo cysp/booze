@@ -1,200 +1,147 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
-import {
-  BottleModal,
-  type BottleModalSubmit,
-  type BottleModalSubmitResult,
-} from "./BottleModal.tsx";
-import { formStateForItem, initialFormState } from "./inventory-model.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BottleModal } from "./BottleModal.tsx";
+import type {
+  BottleFormAction,
+  BottleModalSubmit,
+  BottleModalSubmitResult,
+} from "./bottle-payload.ts";
+import { initialFormState } from "./inventory-model.ts";
 import { inventoryItemFixture, locationsFixture, sitesFixture } from "./test/catalogue-fixtures.ts";
 
-function closeBottle(): void {
-  // The containing catalogue owns close state; this test observes confirmation only.
-}
-
-function requiredInput(container: HTMLElement, name: string): HTMLInputElement {
-  const input = container.querySelector<HTMLInputElement>(`[name='${name}']`);
-  if (input === null) {
-    throw new Error(`Missing input ${name}`);
-  }
-  return input;
-}
-
-async function chooseSharedWineEdit(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(screen.getByRole("combobox", { name: "What are you editing?" }));
-  await user.click(screen.getByRole("option", { name: "Correct wine details" }));
-}
-
-async function submitBottle(): Promise<BottleModalSubmitResult> {
+const item = inventoryItemFixture();
+const auth = async () => ({});
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ data: [], totalCount: 0, nextPageToken: null })),
+  );
+});
+afterEach(() => vi.unstubAllGlobals());
+async function successfulSave(): Promise<BottleModalSubmitResult> {
   return { ok: true };
 }
-
-describe("BottleModal destructive actions", () => {
-  it("keeps an invalid drinking window in the editor until corrected", async () => {
-    const user = userEvent.setup();
-    const item = inventoryItemFixture();
-    const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-    render(
+function close(): void {
+  /* The parent owns the selected action. */
+}
+function renderAction(
+  action: BottleFormAction,
+  onSubmit = vi.fn<(input: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(successfulSave),
+) {
+  return {
+    onSubmit,
+    ...render(
       <BottleModal
-        form={formStateForItem(item)}
+        getAuthHeaders={auth}
+        action={action}
         isSaving={false}
-        item={item}
         locations={locationsFixture}
         sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
+        onClose={close}
         onSubmit={onSubmit}
       />,
-    );
-    await chooseSharedWineEdit(user);
-    const from = screen.getByRole("textbox", { name: "Drink from" });
-    const to = screen.getByRole("textbox", { name: "Drink to" });
-    await user.clear(from);
-    await user.type(from, "2038");
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-    expect(await screen.findByText("Drink to must be on or after Drink from.")).toBeVisible();
-    expect(onSubmit).not.toHaveBeenCalled();
-    expect(from).toHaveValue("2038");
-    await user.clear(to);
-    await user.type(to, "2040");
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledTimes(1);
-    });
+    ),
+  };
+}
+async function openReference(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByText("Wine reference and evidence"));
+}
+
+describe("focused bottle action drafts", () => {
+  it("shows only the fields owned by the chosen action", () => {
+    renderAction({ kind: "edit-bottle", item });
+    expect(screen.getByRole("textbox", { name: "Bottle notes" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Bottle number" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Winery" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Bottle location" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark consumed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete bottle" })).not.toBeInTheDocument();
   });
-
-  it.each([
-    { field: "Source", value: "Corrected critic", expectedSourceId: undefined },
-    { field: "Rating", value: "96 points", expectedSourceId: "original-source" },
-  ])(
-    "preserves review provenance when editing $field",
-    async ({ field, value, expectedSourceId }) => {
-      const user = userEvent.setup();
-      const item = inventoryItemFixture({
-        criticReviews: [
-          {
-            id: "original-review",
-            siteId: "site-owner",
-            wineVintageId: "vintage-1",
-            reviewSourceId: "original-source",
-            reviewSourceName: "Original critic",
-            ratingText: "95 points",
-            ratingValue: 95,
-            ratingScale: "100 points",
-            sourceUrl: "https://example.com/review",
-            reviewedAt: null,
-            provenance: "Wine guide",
-            notes: "Checked by owner",
-            createdAt: "2026-07-25T00:00:00.000Z",
-            updatedAt: "2026-07-25T00:00:00.000Z",
-          },
-        ],
-      });
-      const onSubmit =
-        vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-      render(
-        <BottleModal
-          form={formStateForItem(item)}
-          isSaving={false}
-          item={item}
-          locations={locationsFixture}
-          sites={sitesFixture}
-          title="Edit bottle"
-          onClose={closeBottle}
-          onSubmit={onSubmit}
-        />,
-      );
-      await chooseSharedWineEdit(user);
-      const input = screen.getByRole("textbox", { name: new RegExp(`^${field}.*Required`, "iu") });
-      await user.clear(input);
-      await user.type(input, value);
-      await user.click(screen.getByRole("button", { name: "Save bottle" }));
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledTimes(1);
-      });
-      expect(onSubmit.mock.calls[0]?.[0].criticReviews[0]).toMatchObject({
-        reviewSourceId: expectedSourceId,
-        reviewSourceName: field === "Source" ? value : "Original critic",
-        ratingText: field === "Rating" ? value : "95 points",
-        provenance: "Wine guide",
-        notes: "Checked by owner",
-      });
-      expect(item.criticReviews[0]?.reviewSourceName).toBe("Original critic");
-    },
-  );
-
-  it("does not offer a position note until a storage location is chosen", async () => {
+  it("allows notes-only editing of a historical 75000 ml bottle without validating or resubmitting it", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture({
-      storageLocationId: null,
-      storageLocationName: null,
-      positionHint: null,
+    const historical = inventoryItemFixture({
+      volumeMl: 75_000,
+      alcoholPercent: 140,
+      vintageYear: 1700,
     });
-    render(
-      <BottleModal
-        form={formStateForItem(item)}
-        isSaving={false}
-        item={item}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
-        onSubmit={submitBottle}
-      />,
+    const { onSubmit } = renderAction({ kind: "edit-bottle", item: historical });
+    expect(screen.getByRole("textbox", { name: /Bottle size/u })).toHaveValue("75000");
+    await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Inspected");
+    await user.click(screen.getByRole("button", { name: "Save bottle facts" }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        kind: "edit-bottle",
+        bottle: { notes: "Inspected" },
+      });
+    });
+    expect(historical.volumeMl).toBe(75_000);
+  });
+  it("rejects a changed invalid bottle size and retains the draft", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderAction({ kind: "edit-bottle", item });
+    const volume = screen.getByRole("textbox", { name: /Bottle size/u });
+    await user.clear(volume);
+    await user.type(volume, "2023 typo");
+    await user.click(screen.getByRole("button", { name: "Save bottle facts" }));
+    expect(
+      await within(screen.getByRole("dialog")).findByText(
+        "Bottle size must be a whole number from 1 to 30000 ml.",
+      ),
+    ).toBeVisible();
+    expect(volume).toHaveValue("2023 typo");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("does not offer a position note without a storage location", () => {
+    renderAction({
+      kind: "move",
+      item: inventoryItemFixture({
+        storageLocationId: null,
+        storageLocationName: null,
+        positionHint: null,
+      }),
+    });
+    expect(screen.getByRole("textbox", { name: "Position note" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
     );
-    const position = screen.getByRole("textbox", { name: "Position note" });
-    expect(position).toHaveAttribute("aria-disabled", "true");
-    expect(position).toHaveAttribute("readonly");
-    await user.type(position, "unavailable edit");
-    expect(position).toHaveValue("");
     expect(screen.getByText("Choose a location to add a position note.")).toBeVisible();
   });
-
-  it("keeps unsaved changes until discarding is explicitly confirmed", async () => {
+  it("retains dirty fields until discard is confirmed and restores focus when discard is cancelled", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture();
     const onClose = vi.fn<() => void>();
     render(
       <BottleModal
-        form={formStateForItem(item)}
+        getAuthHeaders={auth}
+        action={{ kind: "edit-bottle", item }}
         isSaving={false}
-        item={item}
         locations={locationsFixture}
         sites={sitesFixture}
-        title="Edit bottle"
         onClose={onClose}
-        onSubmit={submitBottle}
+        onSubmit={successfulSave}
       />,
     );
-    await chooseSharedWineEdit(user);
-    const winery = screen.getByRole("textbox", { name: /Winery/iu });
-    await user.type(winery, " corrected");
+    const notes = screen.getByRole("textbox", { name: "Bottle notes" });
+    await user.type(notes, "Unsaved");
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.getByRole("alertdialog", { name: "Discard unsaved changes?" })).toBeVisible();
     expect(onClose).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(winery).toHaveValue(`${item.wineryName} corrected`);
-
-    const unload = new Event("beforeunload", { cancelable: true });
-    window.dispatchEvent(unload);
-    expect(unload.defaultPrevented).toBe(true);
-
+    expect(notes).toHaveValue("Unsaved");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    });
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(screen.getByRole("button", { name: "Discard changes" }));
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
-
-  it("serializes saving with consume, deletion, closing, and repeated form submission", async () => {
+  it("serializes saving, repeated submit and close; failed saves retain the draft", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture();
-    const onClose = vi.fn<() => void>();
-    const onMarkConsumed = vi.fn(async () => true);
-    const onDelete = vi.fn(async () => true);
     let resolveSave: ((result: BottleModalSubmitResult) => void) | undefined;
     const onSubmit = vi.fn(
       async () =>
@@ -202,264 +149,215 @@ describe("BottleModal destructive actions", () => {
           resolveSave = resolve;
         }),
     );
+    const onClose = vi.fn<() => void>();
     render(
       <BottleModal
-        form={formStateForItem(item)}
+        getAuthHeaders={auth}
+        action={{ kind: "edit-bottle", item }}
         isSaving={false}
-        item={item}
         locations={locationsFixture}
         sites={sitesFixture}
-        title="Edit bottle"
         onClose={onClose}
         onSubmit={onSubmit}
-        onDelete={onDelete}
-        onMarkConsumed={onMarkConsumed}
       />,
     );
-    await chooseSharedWineEdit(user);
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-    const winery = screen.getByRole("textbox", { name: /Winery/iu });
-    expect(winery).toBeDisabled();
-    await user.type(winery, "unavailable edit");
-    expect(winery).toHaveValue(item.wineryName ?? "");
-    expect(screen.getByRole("button", { name: "Mark drunk" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete bottle" })).toBeDisabled();
-    const form = winery.closest("form");
-    if (form === null) {
-      throw new Error("Missing bottle form");
-    }
+    const notes = screen.getByRole("textbox", { name: "Bottle notes" });
+    await user.type(notes, "Keep me");
+    await user.click(screen.getByRole("button", { name: "Save bottle facts" }));
+    expect(notes).toBeDisabled();
+    const form = notes.closest("form");
+    if (form === null) throw new Error("Missing form");
     fireEvent.submit(form);
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
-    expect(onMarkConsumed).not.toHaveBeenCalled();
-    expect(onDelete).not.toHaveBeenCalled();
-
     resolveSave?.({ ok: false, message: "Temporary failure" });
-    expect(await screen.findByText("Temporary failure")).toBeVisible();
-    expect(winery).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Mark drunk" })).toBeEnabled();
+    expect(await within(screen.getByRole("dialog")).findByText("Temporary failure")).toBeVisible();
+    expect(notes).toBeEnabled();
+    expect(notes).toHaveValue("Keep me");
   });
-
-  it("requires saving an edited draft before marking the bottle drunk", async () => {
+  it("keeps dirty scalar and evidence drafts across parent loading renders", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture();
-    const onMarkConsumed = vi.fn(async () => true);
-    render(
-      <BottleModal
-        form={formStateForItem(item)}
-        isSaving={false}
-        item={item}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
-        onSubmit={submitBottle}
-        onMarkConsumed={onMarkConsumed}
-      />,
-    );
-    await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Opened tonight");
-    expect(screen.getByRole("button", { name: "Mark drunk" })).toBeDisabled();
-    expect(screen.getByText("Save your changes before marking this bottle drunk.")).toBeVisible();
-    expect(onMarkConsumed).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed numbers and preserves the draft instead of silently truncating them", async () => {
-    const user = userEvent.setup();
-    const item = inventoryItemFixture();
-    const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-    render(
-      <BottleModal
-        form={formStateForItem(item)}
-        isSaving={false}
-        item={item}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
-        onSubmit={onSubmit}
-      />,
-    );
-    await chooseSharedWineEdit(user);
-    const vintage = screen.getByRole("textbox", { name: /^Vintage/u });
-    await user.clear(vintage);
-    await user.type(vintage, "2023 typo");
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-
-    expect(
-      await screen.findByText("Vintage must be a whole year from 1800 to 2200."),
-    ).toBeVisible();
-    expect(vintage).toHaveValue("2023 typo");
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("requires explicit AlertDialog confirmation before deleting", async () => {
-    const user = userEvent.setup();
-    const item = inventoryItemFixture();
-    const onDelete = vi.fn(async () => true);
-
-    render(
-      <BottleModal
-        form={formStateForItem(item)}
-        isSaving={false}
-        item={item}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
-        onDelete={onDelete}
-        onSubmit={submitBottle}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Delete bottle" }));
-    expect(onDelete).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog", { name: "Delete this bottle?" })).toBeVisible();
-
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onDelete).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "Delete bottle" }));
-    await user.click(
-      within(screen.getByRole("alertdialog", { name: "Delete this bottle?" })).getByRole("button", {
-        name: "Delete bottle",
-      }),
-    );
-    expect(onDelete).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves dirty scalar and repeatable values across parent loading renders", async () => {
-    const user = userEvent.setup();
-    const item = inventoryItemFixture();
     const props = {
-      form: formStateForItem(item),
-      item,
+      action: { kind: "correct-wine", item } as const,
       locations: locationsFixture,
       sites: sitesFixture,
-      title: "Edit bottle",
-      onClose: closeBottle,
-      onSubmit: submitBottle,
-    } as const;
-    const { container, rerender } = render(<BottleModal {...props} isSaving={false} />);
-    await chooseSharedWineEdit(user);
-
-    const winery = screen.getByRole("textbox", { name: /Winery/iu });
+      onClose: close,
+      onSubmit: successfulSave,
+    };
+    const { rerender } = render(<BottleModal getAuthHeaders={auth} {...props} isSaving={false} />);
+    const winery = screen.getByRole("textbox", { name: "Winery" });
     await user.clear(winery);
-    await user.type(winery, "Unsaved Adversarial Winery");
-
+    await user.type(winery, "Unsaved winery");
+    await openReference(user);
     await user.click(screen.getByRole("button", { name: "Add review" }));
     await user.type(screen.getByRole("textbox", { name: /^Source.*Required/iu }), "Local critic");
-    await user.type(screen.getByRole("textbox", { name: /Rating.*Required/iu }), "96 points");
-
+    await user.type(screen.getByRole("textbox", { name: /^Rating.*Required/iu }), "96 points");
     await user.click(screen.getByRole("button", { name: "Add award" }));
-    await user.type(requiredInput(container, "awards.0.awardLevel"), "Gold");
-    await user.type(requiredInput(container, "awards.0.awardName"), "Local show");
-
-    rerender(<BottleModal {...props} isSaving />);
-
-    expect(winery).toHaveValue("Unsaved Adversarial Winery");
-    expect(container.querySelector("[name='criticReviews.0.reviewSourceName']")).toHaveValue(
+    await user.type(
+      screen.getByRole("textbox", { name: /^Competition.*Required/iu }),
+      "Local show",
+    );
+    rerender(<BottleModal getAuthHeaders={auth} {...props} isSaving />);
+    expect(winery).toHaveValue("Unsaved winery");
+    expect(screen.getByRole("textbox", { name: /^Source.*Required/iu })).toHaveValue(
       "Local critic",
     );
-    expect(container.querySelector("[name='criticReviews.0.ratingText']")).toHaveValue("96 points");
-    expect(container.querySelector("[name='awards.0.awardLevel']")).toHaveValue("Gold");
-    expect(container.querySelector("[name='awards.0.awardName']")).toHaveValue("Local show");
+    expect(screen.getByRole("textbox", { name: /^Competition.*Required/iu })).toHaveValue(
+      "Local show",
+    );
   });
 });
 
-describe("BottleModal wine identity", () => {
-  it("saves producer and grape facts without a proprietary name", async () => {
+describe("explicit wine operations", () => {
+  it("shows affected count and rejects contradictory drinking-window changes", async () => {
     const user = userEvent.setup();
-    const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-    render(
-      <BottleModal
-        form={{
-          ...initialFormState,
-          siteId: "site-owner",
-          wineryName: "RIKARD",
-          grapeVarieties: ["Shiraz"],
-        }}
-        isSaving={false}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Add bottle"
-        onClose={closeBottle}
-        onSubmit={onSubmit}
-      />,
-    );
-    expect(screen.getByRole("textbox", { name: "Designation (optional)" })).not.toBeRequired();
-    expect(screen.getByText("Catalogue title: RIKARD Shiraz")).toBeVisible();
-    expect(screen.getByRole("combobox", { name: "Vintage status" })).toHaveTextContent(
-      "Unknown vintage",
-    );
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-    expect(onSubmit.mock.calls[0]?.[0].allowUnidentified).toBe(false);
-    expect(onSubmit.mock.calls[0]?.[0].form).toMatchObject({
-      designation: "",
-      vintageStatus: "unknown",
-      vintageYear: "",
+    const { onSubmit } = renderAction({
+      kind: "correct-wine",
+      item: inventoryItemFixture({ wineBottleCount: 7 }),
+    });
+    expect(screen.getByText("Corrections will update all 7 linked bottles.")).toBeVisible();
+    await openReference(user);
+    const from = screen.getByRole("textbox", { name: "Drink from" });
+    const to = screen.getByRole("textbox", { name: "Drink to" });
+    await user.clear(from);
+    await user.type(from, "2038");
+    await user.click(screen.getByRole("button", { name: "Save wine corrections" }));
+    expect(
+      await within(screen.getByRole("dialog")).findByText(
+        "Drink to must be on or after Drink from.",
+      ),
+    ).toBeVisible();
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.clear(to);
+    await user.type(to, "2040");
+    await user.click(screen.getByRole("button", { name: "Save wine corrections" }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "correct-wine",
+          wine: { drinkFromYear: 2038, drinkToYear: 2040 },
+        }),
+      );
     });
   });
-
-  it("offers an explicit action to save an unidentified wine", async () => {
+  it("does not validate or resubmit unchanged historical wine facts during a note correction", async () => {
     const user = userEvent.setup();
-    const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-    render(
-      <BottleModal
-        form={{ ...initialFormState, siteId: "site-owner" }}
-        isSaving={false}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Add bottle"
-        onClose={closeBottle}
-        onSubmit={onSubmit}
-      />,
+    const { onSubmit } = renderAction({
+      kind: "correct-wine",
+      item: inventoryItemFixture({
+        vintageYear: 1700,
+        alcoholPercent: 140,
+        drinkFromYear: 1600,
+        drinkToYear: 1500,
+      }),
+    });
+    await openReference(user);
+    await user.type(
+      screen.getByRole("textbox", { name: "Wine notes" }),
+      "Historical record inspected",
     );
-    expect(screen.queryByRole("button", { name: "Save bottle" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save wine corrections" }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        kind: "correct-wine",
+        wine: { notes: "Historical record inspected" },
+        allowUnidentified: false,
+      });
+    });
+  });
+  it.each([
+    ["Source", "Corrected critic", undefined],
+    ["Rating", "96 points", "original-source"],
+  ] as const)("preserves provenance when correcting %s", async (field, value, expectedSourceId) => {
+    const user = userEvent.setup();
+    const historical = inventoryItemFixture({
+      criticReviews: [
+        {
+          id: "original-review",
+          siteId: item.siteId,
+          wineVintageId: item.wineVintageId,
+          reviewSourceId: "original-source",
+          reviewSourceName: "Original critic",
+          ratingText: "95 points",
+          ratingValue: 95,
+          ratingScale: "100 points",
+          sourceUrl: "https://example.com/review",
+          reviewedAt: null,
+          provenance: "Wine guide",
+          notes: "Checked by owner",
+          createdAt: "2026-07-25",
+          updatedAt: "2026-07-25",
+        },
+      ],
+    });
+    const { onSubmit } = renderAction({ kind: "correct-wine", item: historical });
+    await openReference(user);
+    const input = screen.getByRole("textbox", { name: new RegExp(`^${field}.*Required`, "iu") });
+    await user.clear(input);
+    await user.type(input, value);
+    await user.click(screen.getByRole("button", { name: "Save wine corrections" }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "correct-wine",
+          criticReviews: [
+            expect.objectContaining({
+              reviewSourceId: expectedSourceId,
+              reviewSourceName: field === "Source" ? value : "Original critic",
+              ratingText: field === "Rating" ? value : "95 points",
+              provenance: "Wine guide",
+              notes: "Checked by owner",
+            }),
+          ],
+        }),
+      );
+    });
+    expect(historical.criticReviews[0]?.reviewSourceName).toBe("Original critic");
+  });
+  it("requires complete new evidence and focuses its error", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderAction({ kind: "correct-wine", item });
+    await openReference(user);
+    await user.click(screen.getByRole("button", { name: "Add review" }));
+    await user.click(screen.getByRole("button", { name: "Save wine corrections" }));
+    expect(
+      await within(screen.getByRole("dialog")).findByText("Rating is required."),
+    ).toBeVisible();
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByText(/Wine details are incomplete/u)).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /^Source.*Required/iu })).toHaveFocus();
+    });
+  });
+  it("starts a reassignment with blank wine facts and evidence", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderAction({ kind: "reassign", item });
+    expect(screen.getByRole("textbox", { name: "Winery" })).toHaveValue("");
+    expect(screen.queryByRole("textbox", { name: "Bottle notes" })).not.toBeInTheDocument();
+    await openReference(user);
+    expect(screen.getByText("No critic reviews recorded.")).toBeVisible();
+    expect(screen.getByText("No awards recorded.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save as unidentified wine" }));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allowUnidentified: true }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "reassign",
+          wine: expect.objectContaining<Record<string, unknown>>({
+            wineryName: "",
+            grapeVarieties: [],
+            alcoholPercent: null,
+            drinkFromYear: null,
+            drinkToYear: null,
+          }) as unknown,
+          criticReviews: [],
+          awards: [],
+          allowUnidentified: true,
+        }),
+      );
+    });
   });
-
-  it("locks shared facts until an explicit correction and shows every affected bottle", async () => {
+  it("chooses an existing zero-stock wine without validating or submitting its facts", async () => {
     const user = userEvent.setup();
-    const item = inventoryItemFixture({ wineBottleCount: 7 });
-    const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-    render(
-      <BottleModal
-        form={formStateForItem(item)}
-        item={item}
-        isSaving={false}
-        locations={locationsFixture}
-        sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
-        onSubmit={onSubmit}
-      />,
-    );
-    const winery = screen.getByRole("textbox", { name: "Winery" });
-    expect(winery).toHaveAttribute("aria-disabled", "true");
-    expect(winery).toHaveAttribute("readonly");
-    await user.type(winery, "unavailable edit");
-    expect(winery).toHaveValue(item.wineryName ?? "");
-    const notes = screen.getByRole("textbox", { name: "Bottle notes" });
-    expect(notes).not.toHaveAttribute("aria-disabled", "true");
-    expect(notes).not.toHaveAttribute("readonly");
-    await chooseSharedWineEdit(user);
-    expect(screen.getByText("Corrections will update all 7 linked bottles.")).toBeVisible();
-    await user.type(screen.getByRole("textbox", { name: "Designation (optional)" }), " Reserve");
-    await user.click(screen.getByRole("button", { name: "Save bottle" }));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ wineEditScope: "shared" }));
-  });
-
-  it("offers a wine option without in-stock inventory and locks that wine's details", async () => {
-    const user = userEvent.setup();
-    const item = inventoryItemFixture();
     const target = {
       wineVintageId: "target-wine",
       siteId: item.siteId,
@@ -471,131 +369,70 @@ describe("BottleModal wine identity", () => {
       grapeVarieties: ["Shiraz"],
       region: null,
     };
-    const otherSite = {
-      ...target,
-      siteId: "site-editor",
-      wineVintageId: "other-site",
-      displayName: "Hidden wine",
-    };
     const onSubmit =
-      vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
+      vi.fn<(input: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(successfulSave);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            target,
+            {
+              ...target,
+              siteId: "other-site",
+              wineVintageId: "hidden-wine",
+              displayName: "Hidden wine",
+            },
+          ],
+          totalCount: 2,
+          nextPageToken: null,
+        }),
+      ),
+    );
     render(
       <BottleModal
-        form={formStateForItem(item)}
-        item={item}
-        wines={[target, otherSite]}
+        getAuthHeaders={auth}
+        action={{ kind: "reassign", item }}
         isSaving={false}
         locations={locationsFixture}
         sites={sitesFixture}
-        title="Edit bottle"
-        onClose={closeBottle}
+        onClose={close}
         onSubmit={onSubmit}
       />,
     );
-    await user.click(screen.getByRole("combobox", { name: "What are you editing?" }));
-    await user.click(screen.getByRole("option", { name: "This bottle is a different wine" }));
     await user.click(screen.getByRole("combobox", { name: "Wine record" }));
+    expect(await screen.findByRole("option", { name: /2023 Target Shiraz/u })).toBeVisible();
     expect(screen.queryByRole("option", { name: /Hidden wine/u })).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: /2023 Target Shiraz/u }));
     expect(screen.queryByRole("textbox", { name: "Winery" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Critic reviews" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Awards" })).not.toBeInTheDocument();
-    expect(
-      within(screen.getByRole("region", { name: "Selected wine details" })).getByRole("heading", {
-        name: "2023 Target Shiraz",
-      }),
-    ).toBeVisible();
+    expect(screen.queryByText("Wine reference and evidence")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reassign bottle" }));
+    expect(onSubmit).toHaveBeenCalledWith({ kind: "reassign", wineVintageId: "target-wine" });
+  });
+  it("saves manual producer and grape facts without AI or an invented designation", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderAction({
+      kind: "add",
+      form: {
+        ...initialFormState,
+        siteId: item.siteId,
+        wineryName: "RIKARD",
+        grapeVarieties: ["Shiraz"],
+      },
+    });
+    expect(screen.getByText("Catalogue title: RIKARD Shiraz")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Designation (optional)" })).not.toBeRequired();
     await user.click(screen.getByRole("button", { name: "Save bottle" }));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ wineEditScope: "bottle", wineVintageId: "target-wine" }),
+      expect.objectContaining({
+        kind: "add",
+        allowUnidentified: false,
+        form: expect.objectContaining<Record<string, unknown>>({
+          designation: "",
+          vintageStatus: "unknown",
+          vintageYear: "",
+        }) as unknown,
+      }),
     );
   });
-});
-
-it("keeps new-wine evidence separate and restores each draft when switching edit modes", async () => {
-  const user = userEvent.setup();
-  const item = inventoryItemFixture({
-    criticReviews: [
-      {
-        id: "old-review",
-        siteId: "site-owner",
-        wineVintageId: "vintage-1",
-        reviewSourceId: "old-source",
-        reviewSourceName: "Original critic",
-        ratingText: "95 points",
-        ratingValue: 95,
-        ratingScale: "100 points",
-        sourceUrl: null,
-        reviewedAt: null,
-        provenance: null,
-        notes: null,
-        createdAt: "2026-01-01",
-        updatedAt: "2026-01-01",
-      },
-    ],
-    awards: [
-      {
-        id: "old-award",
-        siteId: "site-owner",
-        wineVintageId: "vintage-1",
-        awardName: "Original show",
-        awardLevel: "Gold",
-        awardYear: null,
-        awardBody: null,
-        category: null,
-        points: null,
-        sourceUrl: null,
-        provenance: null,
-        notes: null,
-        createdAt: "2026-01-01",
-        updatedAt: "2026-01-01",
-      },
-    ],
-  });
-  const onSubmit =
-    vi.fn<(submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(submitBottle);
-  const { container } = render(
-    <BottleModal
-      form={formStateForItem(item)}
-      item={item}
-      isSaving={false}
-      locations={locationsFixture}
-      sites={sitesFixture}
-      title="Edit bottle"
-      onClose={closeBottle}
-      onSubmit={onSubmit}
-    />,
-  );
-  await user.click(screen.getByRole("combobox", { name: "What are you editing?" }));
-  await user.click(screen.getByRole("option", { name: "This bottle is a different wine" }));
-  expect(screen.queryByRole("textbox", { name: /^Source.*Required/iu })).not.toBeInTheDocument();
-  expect(container.querySelector("[name='awards.0.awardName']")).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Add review" }));
-  await user.type(screen.getByRole("textbox", { name: /^Source.*Required/iu }), "New critic");
-  await user.type(screen.getByRole("textbox", { name: /Rating.*Required/iu }), "91 points");
-  await user.click(screen.getByRole("button", { name: "Add award" }));
-  await user.type(requiredInput(container, "awards.0.awardName"), "New show");
-  await user.type(requiredInput(container, "awards.0.awardLevel"), "Silver");
-  await chooseSharedWineEdit(user);
-  expect(screen.getByRole("textbox", { name: /^Source.*Required/iu })).toHaveValue(
-    "Original critic",
-  );
-  expect(requiredInput(container, "awards.0.awardName")).toHaveValue("Original show");
-  await user.click(screen.getByRole("combobox", { name: "What are you editing?" }));
-  await user.click(screen.getByRole("option", { name: "This bottle is a different wine" }));
-  expect(screen.getByRole("textbox", { name: /^Source.*Required/iu })).toHaveValue("New critic");
-  expect(requiredInput(container, "awards.0.awardName")).toHaveValue("New show");
-  await user.click(screen.getByRole("button", { name: "Save bottle" }));
-  expect(onSubmit.mock.calls[0]?.[0].criticReviews).toHaveLength(1);
-  expect(onSubmit.mock.calls[0]?.[0].criticReviews[0]).toMatchObject({
-    reviewSourceName: "New critic",
-    ratingText: "91 points",
-  });
-  expect(onSubmit.mock.calls[0]?.[0].criticReviews[0]?.id).toBeUndefined();
-  expect(onSubmit.mock.calls[0]?.[0].awards).toHaveLength(1);
-  expect(onSubmit.mock.calls[0]?.[0].awards[0]).toMatchObject({
-    awardName: "New show",
-    awardLevel: "Silver",
-  });
-  expect(onSubmit.mock.calls[0]?.[0].awards[0]?.id).toBeUndefined();
 });

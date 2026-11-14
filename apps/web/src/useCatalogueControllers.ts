@@ -18,7 +18,6 @@ import type { CaptureSubmitResult } from "./CaptureView.tsx";
 import type { MutationCompletion } from "./useCatalogue.ts";
 import {
   inventoryItem,
-  formStateForItem,
   initialCaptureFormState,
   initialFormState,
   initialLocationFormState,
@@ -46,14 +45,13 @@ export type BottleController = {
   readonly addFormDefaults: FormState;
   readonly cancelAddition: (siteId: string) => void;
   readonly deleteBottle: (bottleId: string) => Promise<boolean>;
-  readonly editingBottle: InventoryItem | null;
-  readonly editingForm: FormState | null;
+  readonly selectedBottle: InventoryItem | null;
+  readonly closeBottleDetails: () => void;
   readonly isAddOpen: boolean;
   readonly isSaving: boolean;
-  readonly openBottleEditor: (item: { readonly id: string }) => Promise<void>;
+  readonly openBottleDetails: (item: { readonly id: string }) => Promise<void>;
   readonly saveBottle: (submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
   readonly saveBottleEdit: (submission: BottleModalSubmit) => Promise<BottleModalSubmitResult>;
-  readonly setEditingBottle: Dispatch<SetStateAction<InventoryItem | null>>;
   readonly setIsAddOpen: Dispatch<SetStateAction<boolean>>;
   readonly updateBottle: (request: {
     readonly bottleId: string;
@@ -103,7 +101,7 @@ export function useBottleController({
   readonly writableSites: readonly SiteItem[];
 }): BottleController {
   const [addFormDefaults, setAddFormDefaults] = useState<FormState>(initialFormState);
-  const [editingBottle, setEditingBottle] = useState<InventoryItem | null>(null);
+  const [selectedBottle, setSelectedBottle] = useState<InventoryItem | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const addition = useAdditionOperation("bottles", additionScope);
   function cancelAddition(siteId: string): void {
@@ -111,18 +109,17 @@ export function useBottleController({
     setIsAddOpen(false);
   }
   const [isSaving, setIsSaving] = useState(false);
-  const editingForm = editingBottle === null ? null : formStateForItem(editingBottle);
   const editorRequest = useRef(0);
   const actor = useRef({ additionScope, getAuthHeaders });
   actor.current = { additionScope, getAuthHeaders };
   useEffect(() => {
-    setEditingBottle(null);
+    setSelectedBottle(null);
     return () => {
       editorRequest.current += 1;
     };
   }, [additionScope, getAuthHeaders]);
 
-  async function openBottleEditor(target: { readonly id: string }): Promise<void> {
+  async function openBottleDetails(target: { readonly id: string }): Promise<void> {
     editorRequest.current += 1;
     const version = editorRequest.current;
     const isCurrent = () =>
@@ -138,7 +135,7 @@ export function useBottleController({
       const payload: unknown = await response.json();
       const detail = bottleResourceSchema.parse(objectProperty(payload, "data"));
       if (!isCurrent()) return;
-      setEditingBottle(inventoryItem(detail));
+      setSelectedBottle(inventoryItem(detail));
       setStatus("Bottle details loaded.");
     } catch {
       if (isCurrent())
@@ -149,6 +146,8 @@ export function useBottleController({
   useDefaultSite(writableSites, setAddFormDefaults);
 
   async function saveBottle(submission: BottleModalSubmit): Promise<BottleModalSubmitResult> {
+    if (submission.kind !== "add")
+      return { ok: false, message: "Choose Add bottle to create a bottle." };
     const { form } = submission;
     if (form.siteId === "") {
       const message = "Choose a site before saving the bottle.";
@@ -208,12 +207,13 @@ export function useBottleController({
     } finally {
       setIsSaving(false);
     }
-    try {
-      await completeMutation({ refresh: "catalogue", successMessage: "Bottle saved." });
-    } catch {
-      setStatus("Bottle saved. Catalogue refresh failed; refresh to see the saved bottle.");
-    }
+    await completeMutation({ refresh: "catalogue", successMessage: "Bottle saved." });
     return { ok: true };
+  }
+
+  function closeBottleDetails(): void {
+    editorRequest.current += 1;
+    setSelectedBottle(null);
   }
 
   async function patchBottle({
@@ -223,6 +223,13 @@ export function useBottleController({
     readonly bottleId: string;
     readonly payload: BottlePatch;
   }): Promise<BottleModalSubmitResult> {
+    if (Object.keys(payload).length === 0) return { ok: true };
+    const viewVersion = editorRequest.current;
+    const isCurrent = () =>
+      viewVersion === editorRequest.current &&
+      actor.current.additionScope === additionScope &&
+      actor.current.getAuthHeaders === getAuthHeaders;
+    const refreshDetails = selectedBottle?.id === bottleId;
     setStatus("Updating bottle...");
     const response = await fetch(`/api/bottles/${encodeURIComponent(bottleId)}`, {
       method: "PATCH",
@@ -237,6 +244,29 @@ export function useBottleController({
       return { ok: false, message };
     }
     await completeMutation({ refresh: "catalogue", successMessage: "Inventory updated." });
+    if (refreshDetails && isCurrent()) {
+      try {
+        const detail = await fetch(`/api/bottles/${encodeURIComponent(bottleId)}`, {
+          headers: await getAuthHeaders(),
+        });
+        if (!detail.ok) throw new Error("Detail refresh failed");
+        const detailPayload: unknown = await detail.json();
+        const item = inventoryItem(
+          bottleResourceSchema.parse(objectProperty(detailPayload, "data")),
+        );
+        if (isCurrent()) {
+          setSelectedBottle((current) => (current?.id === bottleId ? item : current));
+        }
+      } catch {
+        if (isCurrent()) {
+          setSelectedBottle((current) => (current?.id === bottleId ? null : current));
+          setStatus(
+            "Bottle updated. Details could not be reloaded; open the bottle again to view its current facts.",
+          );
+        }
+        return { ok: true };
+      }
+    }
     return { ok: true };
   }
 
@@ -244,7 +274,14 @@ export function useBottleController({
     readonly bottleId: string;
     readonly payload: BottlePatch;
   }): Promise<boolean> {
-    return (await patchBottle(input)).ok;
+    try {
+      return (await patchBottle(input)).ok;
+    } catch {
+      setStatus(
+        "Bottle status could not be confirmed. Check your connection and refresh before trying again.",
+      );
+      return false;
+    }
   }
 
   async function deleteBottle(bottleId: string): Promise<boolean> {
@@ -262,23 +299,19 @@ export function useBottleController({
   }
 
   async function saveBottleEdit(submission: BottleModalSubmit): Promise<BottleModalSubmitResult> {
-    if (editingBottle === null) {
-      return { message: "Bottle is no longer available to edit.", ok: false };
+    if (selectedBottle === null || submission.kind === "add") {
+      return { message: "Bottle is no longer available for this action.", ok: false };
     }
     setIsSaving(true);
     try {
       const { bottleEditPayload } = await import("./bottle-payload.ts");
-      const updated = await patchBottle({
-        bottleId: editingBottle.id,
-        payload: bottleEditPayload(submission, editingBottle),
+      return await patchBottle({
+        bottleId: selectedBottle.id,
+        payload: bottleEditPayload(submission, selectedBottle),
       });
-      if (updated.ok) {
-        setEditingBottle(null);
-        return { ok: true };
-      }
-      return updated;
     } catch {
-      const message = "Bottle was not updated. Check your connection and try again.";
+      const message =
+        "The change could not be confirmed. Your details are still here; check your connection and refresh before trying again.";
       setStatus(message);
       return { message, ok: false };
     } finally {
@@ -302,14 +335,13 @@ export function useBottleController({
     addFormDefaults,
     cancelAddition,
     deleteBottle,
-    editingBottle,
-    editingForm,
+    selectedBottle,
+    closeBottleDetails,
     isAddOpen,
     isSaving,
-    openBottleEditor,
+    openBottleDetails,
     saveBottle,
     saveBottleEdit,
-    setEditingBottle,
     setIsAddOpen,
     updateBottle,
     useLocation,
@@ -348,7 +380,6 @@ export function useCaptureController({
     }
     setIsSaving(true);
     setStatus("Submitting capture...");
-    let savedResult: CaptureSubmitResult | undefined;
     try {
       const operationId = await addition.operationId(form.siteId, {
         siteId: form.siteId,
@@ -398,9 +429,8 @@ export function useCaptureController({
       } catch {
         const message =
           "Capture is saved, but upload completion could not be confirmed. Keep these photos and retry the same capture.";
-        savedResult = { kind: "pending", message };
         await completeMutation({ refresh: "captures", successMessage: message });
-        return savedResult;
+        return { kind: "pending", message };
       }
       const data = objectProperty(responsePayload, "data");
       const captureId = objectProperty(data, "captureId");
@@ -409,14 +439,9 @@ export function useCaptureController({
         const message =
           captureSubmitErrorMessage(responsePayload) ??
           "Capture is saved, but its image upload is incomplete. Keep these photos and retry the same capture.";
-        savedResult = { kind: "pending", message };
         await completeMutation({ refresh: "captures", successMessage: message });
-        return savedResult;
+        return { kind: "pending", message };
       }
-      savedResult = {
-        kind: "submitted",
-        message: "Capture submitted. Review the extracted draft before adding bottles.",
-      };
       addition.clear(form.siteId);
       setCaptureForm({
         siteId: form.siteId,
@@ -429,7 +454,6 @@ export function useCaptureController({
       const message = captureSubmitErrorMessage(responsePayload);
       if (message !== null) {
         const statusMessage = `Capture saved: ${message}`;
-        savedResult = { kind: "saved_with_error", message: statusMessage };
         await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
         return { kind: "saved_with_error", message: statusMessage };
       }
@@ -437,12 +461,6 @@ export function useCaptureController({
       await completeMutation({ refresh: "catalogue", successMessage: statusMessage });
       return { kind: "submitted", message: statusMessage };
     } catch (error) {
-      if (savedResult !== undefined) {
-        setStatus(
-          `${savedResult.message} Catalogue refresh failed; refresh to see the saved capture.`,
-        );
-        return savedResult;
-      }
       const message =
         error instanceof PendingAdditionChangedError
           ? error.message

@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access -- Node executes this script with its built-in test runner. */
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,8 +11,8 @@ import {
   measureClientBundle,
 } from "./check-client-bundle.mjs";
 
-describe("bundleBudgetFailures", () => {
-  it("accepts measurements at every limit", () => {
+void describe("bundleBudgetFailures", () => {
+  void it("accepts measurements at every limit", () => {
     assert.deepEqual(
       bundleBudgetFailures({
         initialCss: {
@@ -32,7 +31,7 @@ describe("bundleBudgetFailures", () => {
     );
   });
 
-  it("reports each independently exceeded budget", () => {
+  void it("reports each independently exceeded budget", () => {
     const failures = bundleBudgetFailures({
       initialCss: {
         bytes: bundleBudgets.initialCssBytes + 1,
@@ -50,8 +49,8 @@ describe("bundleBudgetFailures", () => {
   });
 });
 
-describe("measureClientBundle", () => {
-  it("counts HTML script and module-preload assets once, excluding lazy chunks from initial bytes", (context) => {
+void describe("measureClientBundle", () => {
+  void it("counts HTML script and module-preload assets once, excluding lazy chunks from initial bytes", (context) => {
     const directory = mkdtempSync(path.join(tmpdir(), "booze-bundle-test-"));
     context.after(() => {
       rmSync(directory, { recursive: true, force: true });
@@ -98,7 +97,7 @@ describe("measureClientBundle", () => {
     });
   });
 
-  it("rejects a missing preloaded asset rather than understating initial bytes", (context) => {
+  void it("rejects a missing preloaded asset rather than understating initial bytes", (context) => {
     const directory = mkdtempSync(path.join(tmpdir(), "booze-bundle-test-"));
     context.after(() => {
       rmSync(directory, { recursive: true, force: true });
