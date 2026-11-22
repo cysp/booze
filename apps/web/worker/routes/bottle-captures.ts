@@ -1,4 +1,3 @@
-import { entityIdSchema } from "../../shared/entity-id.ts";
 import { createBottleCapture } from "../capture-intake.ts";
 // oxlint-disable import/max-dependencies -- Capture route composes storage, workflow, OCR, import, and authorization boundaries.
 import { createD1Client } from "@chikachow/booze-db";
