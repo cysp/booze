@@ -122,7 +122,7 @@ export function createOperationAudit({
       ${targetId}, ${targetId}, ${JSON.stringify({ ...input, source })}, coalesce(${before}, '{}'), '{}', 0, CURRENT_TIMESTAMP
       where ${condition}`),
     finish(after: SQL, affectedRecordCount?: SQL): OperationStatement {
-      const snapshot = sql`coalesce(${after}, '{}')`;
+      const snapshot = sql`next_audit.snapshot`;
       return database
         .update(mcpToolAuditEvents)
         .set({
@@ -131,6 +131,7 @@ export function createOperationAudit({
             affectedRecordCount ??
             sql`case when ${mcpToolAuditEvents.beforeJson} = ${snapshot} then 0 else 1 end`,
         })
+        .from(sql`(select coalesce(${after}, '{}') as snapshot) as next_audit`)
         .where(eq(mcpToolAuditEvents.id, id));
     },
     read: database

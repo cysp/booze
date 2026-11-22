@@ -181,6 +181,52 @@ await describe("complete bottle operations", async () => {
     assert.equal(sqlite.prepare("SELECT status FROM bottles").get()?.["status"], "consumed");
   });
 
+  await it("records a full shared wine correction within the D1 bound-parameter limit", async () => {
+    const { context, d1 } = setup();
+    const prepare = d1.prepare.bind(d1);
+    d1.prepare = (query) => {
+      assert.ok(
+        (query.match(/\?/gu) ?? []).length <= 100,
+        "D1 limits each statement to 100 bindings",
+      );
+      return prepare(query);
+    };
+    const change = await editBottle(context, "bottle", {
+      expectedWineVintageId: "wine",
+      expectedAffectedBottleCount: 1,
+      wineEditScope: "shared",
+      bottle: { notes: "Bottle note", barcode: "ABC", volumeMl: 750 },
+      wine: {
+        brandName: "House",
+        designation: "Reserve",
+        vintageYear: 2020,
+        vintageStatus: "year",
+        region: "South",
+        country: "Australia",
+        appellation: "Estate",
+        classification: "Reserve",
+        wineColor: "red",
+        wineType: "still",
+        alcoholPercent: 14,
+        drinkFromYear: 2025,
+        drinkToYear: 2035,
+        description: "Full description",
+        drinkingAdvice: "Decant",
+        labelText: "Estate Reserve",
+        notes: "Updated",
+        sourceUrl: "https://example.org/wine",
+        grapeVarieties: ["Shiraz"],
+      },
+      criticReviews: [{ reviewSourceName: "Critic", ratingText: "95" }],
+      awards: [{ awardName: "Show", awardLevel: "Gold" }],
+    });
+    assert.equal(change.affectedRecordCount, 1);
+    assert.equal(change.before.wine?.["sourceUrl"], null);
+    assert.equal(change.after?.wine?.["sourceUrl"], "https://example.org/wine");
+    assert.equal(change.after?.criticReviews?.length, 1);
+    assert.equal(change.after?.awards?.length, 1);
+  });
+
   await it("restores history with its surviving location and leaves deleted locations unset", async () => {
     const { context } = setup();
     await consumeBottle(context, "bottle");

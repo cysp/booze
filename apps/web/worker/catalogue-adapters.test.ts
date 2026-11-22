@@ -163,6 +163,19 @@ await it("HTTP and MCP reuse the same exact location and both reject a type-chan
     fixture.sqlite.prepare("SELECT count(*) AS n FROM mcp_tool_audit_events").get()?.["n"],
     2,
   );
+  const { after } = z
+    .object({ after: z.object({ id: z.string() }) })
+    .parse(repeat.structuredContent);
+  const child = await fixture.client.callTool({
+    name: "cellar.create_storage_location",
+    arguments: { ...input, name: "Shelf", parentStorageLocationId: after.id },
+  });
+  assert.notEqual(child.isError, true, JSON.stringify(child));
+  assert.equal(
+    z.object({ after: z.object({ parentId: z.string() }) }).parse(child.structuredContent).after
+      .parentId,
+    after.id,
+  );
 });
 
 await it("MCP drinking-window writes return compact committed facts and audit no-ops", async (context) => {
