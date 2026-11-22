@@ -187,7 +187,7 @@ it("passes an existing wine selection through the import action", async () => {
   });
 });
 
-it("retries an unconfirmed queued start without opening a review or allowing deletion", async () => {
+it("retries an unconfirmed queued start and offers cancellation while review is unavailable", async () => {
   const user = userEvent.setup();
   const onRetry = vi.fn(async () => true);
   const onImport = vi.fn<CaptureImportAction>(resolvedImport);
@@ -200,7 +200,7 @@ it("retries an unconfirmed queued start without opening a review or allowing del
   });
   expect(screen.getByText(/Capture is saved and queued/u)).toBeVisible();
   expect(screen.queryByRole("button", { name: "Review capture" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Delete capture" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Delete capture" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Retry" }));
   expect(onRetry).toHaveBeenCalledExactlyOnceWith("capture-1");
   expect(onImport).not.toHaveBeenCalled();
