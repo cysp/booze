@@ -282,6 +282,11 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     ).filter((issue) => {
       if (payload.wineVintageId !== undefined && issue.path.startsWith("wine.")) return false;
       if (capture.reviewCandidate === null) return true;
+      if (
+        issue.path === "wine.vintageYear" &&
+        capture.reviewCandidate.wine.vintageStatus === "non_vintage"
+      )
+        return false;
       const [section, field] = issue.path.split(".");
       if ((section !== "wine" && section !== "bottle") || field === undefined) return true;
       return !Object.entries(capture.reviewCandidate[section]).some(

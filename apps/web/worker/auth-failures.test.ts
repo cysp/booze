@@ -53,7 +53,7 @@ await it("keeps a valid signed session's database failure distinct from invalid 
     nbf: now,
     exp: now + 300,
   };
-  const unsigned = `${base64url(JSON.stringify({ alg: "RS256", typ: "JWT", kid }))}.${base64url(JSON.stringify(claims))}`;
+  const unsigned = `${base64url(JSON.stringify({ alg: "RS256", typ: "JWT", cat: "cl_B7d4PD111AAA", kid }))}.${base64url(JSON.stringify(claims))}`;
   const token = `${unsigned}.${sign("RSA-SHA256", new TextEncoder().encode(unsigned), privateKey).toString("base64url")}`;
   // Only the DB and authentication bindings are exercised by these routes.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- External capture bindings are irrelevant to this authentication boundary.

@@ -64,6 +64,44 @@ function setup(withRun = true) {
 }
 
 await describe("capture review corrections", async () => {
+  await it("accepts a saved non-vintage label as a correction for an ambiguous year", async () => {
+    const { sqlite, request } = setup();
+    try {
+      sqlite.prepare("UPDATE bottle_capture_runs SET import_candidate_json = ?").run(
+        JSON.stringify({
+          ...candidate,
+          validationIssues: [
+            {
+              path: "wine.vintageYear",
+              rawValue: "201?",
+              message: "Enter a year or an explicit non-vintage label.",
+            },
+          ],
+        }),
+      );
+      const saved = await request("PATCH", "/review", {
+        expectedRevision: 0,
+        candidate: {
+          wine: {
+            wineryName: "RIKARD Wines",
+            grapeVarieties: ["Shiraz"],
+            vintageStatus: "non_vintage",
+          },
+          bottle: candidate.bottle,
+        },
+      });
+      assert.equal(saved.status, 200, await saved.clone().text());
+      const imported = await request("POST", "/import", { expectedReviewRevision: 1 });
+      assert.equal(imported.status, 200, await imported.clone().text());
+      assert.equal(
+        sqlite.prepare("SELECT vintage_status FROM wine_vintages").get()?.["vintage_status"],
+        "non_vintage",
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("does not clear unresolved alcohol evidence through a notes-only correction", async () => {
     const { sqlite, request } = setup();
     try {
