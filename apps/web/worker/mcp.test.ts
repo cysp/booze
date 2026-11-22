@@ -121,6 +121,7 @@ async function listRegisteredMcpTools(): Promise<
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "booze-test-client", version: "0.0.0" });
   const server = createBoozeMcpServer({
+    requestUrl: new URL("http://localhost/mcp"),
     database: createD1Client(fakeD1Database()),
     userId: "user_test",
   });

@@ -418,17 +418,23 @@ await describe("capture lifecycle recovery", async () => {
     let correctionsSaved = false;
     d1.batch = async (statements) => {
       assert.equal(
-        await saveCaptureReview({
-          siteId: "site",
-          userId: userIdForClerkUser("dev:tester"),
-          captureId: "capture",
-          database: createD1Client(asD1(sqlite)),
-          expectedRevision: 0,
-          candidate: {
-            wine: { wineryName: "Corrected Producer", designation: "Reserve" },
-            bottle: {},
-          },
-        }),
+        (
+          await saveCaptureReview(
+            {
+              source: "http",
+              userId: userIdForClerkUser("dev:tester"),
+              database: createD1Client(asD1(sqlite)),
+            },
+            {
+              captureId: "capture",
+              expectedRevision: 0,
+              candidate: {
+                wine: { wineryName: "Corrected Producer", designation: "Reserve" },
+                bottle: {},
+              },
+            },
+          )
+        ).after.reviewRevision,
         1,
       );
       correctionsSaved = true;

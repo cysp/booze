@@ -196,26 +196,13 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       headers: context.req.raw.headers,
       secretKey: context.env.CLERK_SECRET_KEY,
     });
-    const capture = await getBottleCapture({
-      captureId: context.req.param("captureId"),
-      database,
-      userId: user.userId,
+    const { after } = await saveCaptureReview(
+      { database, userId: user.userId, source: "http" },
+      { captureId: context.req.param("captureId"), ...payload },
+    );
+    return context.json({
+      data: { reviewRevision: after.reviewRevision, reviewCandidate: payload.candidate },
     });
-    await requireSitePermission({
-      database,
-      permission: "site.content.write",
-      siteId: capture.siteId,
-      userId: user.userId,
-    });
-    const reviewRevision = await saveCaptureReview({
-      captureId: capture.id,
-      database,
-      candidate: payload.candidate,
-      siteId: capture.siteId,
-      userId: user.userId,
-      expectedRevision: payload.expectedRevision,
-    });
-    return context.json({ data: { reviewRevision, reviewCandidate: payload.candidate } });
   })
   .post("/bottle-captures/:captureId/import", async (context) => {
     const payload = manualImportSchema.parse(await readRequestJson(context.req.raw));

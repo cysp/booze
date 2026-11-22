@@ -40,6 +40,7 @@ export const mcpRoutes = new Hono<{ Bindings: Bindings }>()
       enableJsonResponse: true,
     });
     const server = createBoozeMcpServer({
+      requestUrl,
       database,
       userId: authenticatedUser.userId,
     });

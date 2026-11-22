@@ -52,7 +52,11 @@ function identityDatabase() {
 
 async function withIdentityClient(run: (client: Client) => Promise<void>): Promise<void> {
   const sqlite = identityDatabase();
-  const server = createBoozeMcpServer({ database: createD1Client(asD1(sqlite)), userId: "reader" });
+  const server = createBoozeMcpServer({
+    requestUrl: new URL("http://localhost/mcp"),
+    database: createD1Client(asD1(sqlite)),
+    userId: "reader",
+  });
   const client = new Client({ name: "wine-identity-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {

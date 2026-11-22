@@ -11,6 +11,7 @@ import { problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
 import { asD1, migratedDatabase } from "./d1-support.ts";
 import { createBoozeMcpServer } from "./mcp/server.ts";
+import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
 import { bottleRoutes } from "./routes/bottles.ts";
 import { storageLocationRoutes } from "./routes/storage-locations.ts";
 
@@ -31,7 +32,11 @@ async function setup() {
     .prepare("INSERT INTO site_memberships(site_id,user_id,role) VALUES ('site',?,'owner')")
     .run(userId);
   const d1 = asD1(sqlite);
-  const server = createBoozeMcpServer({ database: createD1Client(d1), userId });
+  const server = createBoozeMcpServer({
+    requestUrl: new URL("http://localhost/mcp"),
+    database: createD1Client(d1),
+    userId,
+  });
   const client = new Client({ name: "catalogue-adapter-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -39,12 +44,16 @@ async function setup() {
   await client.listTools();
   const app = new Hono<{ Bindings: Bindings }>()
     .route("/", bottleRoutes)
+    .route("/", bottleCaptureRoutes)
     .route("/", storageLocationRoutes)
     .onError(problemResponseForError);
   return {
     client,
+    call: async (name: string, args: Record<string, unknown>) =>
+      client.callTool({ name, arguments: args }),
     sqlite,
-    async request(path: string, method: string, body: unknown) {
+    userId,
+    request: async (path: string, method: string, body: unknown) => {
       return app.request(
         `http://localhost${path}`,
         {
@@ -205,5 +214,210 @@ await it("MCP drinking-window writes return compact committed facts and audit no
       .all()
       .map((row) => row["affected_record_count"]),
     [1, 0],
+  );
+});
+
+await it("MCP manual entry returns a replayable receipt and restore preserves the consumed bottle's identity", async (context) => {
+  const { call, sqlite, close } = await setup();
+  context.after(close);
+  const input = {
+    siteId: "site",
+    wineId: "wine",
+    quantity: 2,
+    storageLocationId: "left",
+    operationId: crypto.randomUUID(),
+  };
+  const add = await call("cellar.add_bottles", input);
+  assert.notEqual(add.isError, true, JSON.stringify(add));
+  const receipt = z
+    .object({
+      after: z.object({ bottleIds: z.array(z.string()), wineVintageId: z.string() }),
+      affectedRecordCount: z.number(),
+    })
+    .parse(add.structuredContent);
+  assert.equal(receipt.affectedRecordCount, 2);
+  assert.equal(receipt.after.wineVintageId, "wine");
+  assert.equal(new Set(receipt.after.bottleIds).size, 2);
+  assert.deepEqual(
+    (await call("cellar.add_bottles", input)).structuredContent,
+    add.structuredContent,
+  );
+  assert.equal((await call("cellar.add_bottles", { ...input, quantity: 3 })).isError, true);
+  assert.equal(
+    (
+      await call("cellar.add_bottles", {
+        ...input,
+        operationId: crypto.randomUUID(),
+        wine: { wineryName: "Ambiguous" },
+      })
+    ).isError,
+    true,
+  );
+  assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottles").get()?.["n"], 3);
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) AS n FROM mcp_tool_audit_events WHERE tool_name='cellar.add_bottles'",
+      )
+      .get()?.["n"],
+    1,
+  );
+
+  const [bottleId] = receipt.after.bottleIds;
+  assert.ok(bottleId !== undefined);
+  assert.notEqual((await call("cellar.mark_bottle_consumed", { bottleId })).isError, true);
+  const searchRows = z.object({ bottles: z.array(z.object({ bottleId: z.string() })) });
+  const stock = searchRows.parse((await call("cellar.search_bottles", {})).structuredContent);
+  assert.equal(
+    stock.bottles.some((row) => row.bottleId === bottleId),
+    false,
+  );
+  const consumed = searchRows.parse(
+    (await call("cellar.search_bottles", { status: "consumed" })).structuredContent,
+  );
+  assert.deepEqual(consumed.bottles, [{ bottleId }]);
+  const restored = await call("cellar.restore_bottle", { bottleId });
+  assert.deepEqual(resultFlags.parse(restored.structuredContent), {
+    changed: true,
+    affectedRecordCount: 1,
+  });
+  assert.deepEqual(
+    z
+      .object({
+        after: z.object({
+          bottleId: z.string(),
+          status: z.string(),
+          storageLocationId: z.string(),
+        }),
+      })
+      .parse(restored.structuredContent).after,
+    { bottleId, status: "in_stock", storageLocationId: "left" },
+  );
+  assert.deepEqual(
+    resultFlags.parse((await call("cellar.restore_bottle", { bottleId })).structuredContent),
+    { changed: false, affectedRecordCount: 0 },
+  );
+  assert.notEqual(
+    (
+      await call("cellar.add_bottles", {
+        siteId: "site",
+        operationId: crypto.randomUUID(),
+        wine: { wineryName: "Maker", designation: "Reserve" },
+      })
+    ).isError,
+    true,
+  );
+
+  sqlite.exec("UPDATE site_memberships SET role='viewer'");
+  assert.equal((await call("cellar.add_bottles", input)).isError, true);
+  assert.equal((await call("cellar.restore_bottle", { bottleId })).isError, true);
+});
+
+await it("MCP photo corrections remain drafts until the browser confirms the saved revision", async (context) => {
+  const { call, request, sqlite, userId, close } = await setup();
+  context.after(close);
+  sqlite.exec("INSERT INTO sites(id,name) VALUES ('private','Private')");
+  const seed = sqlite.prepare(
+    "INSERT INTO bottle_captures(id,site_id,user_id,status,quantity) VALUES (?,?,?,'needs_review',2)",
+  );
+  seed.run("capture", "site", userId);
+  seed.run("hidden", "private", userId);
+  const extraction = {
+    wine: { wineryName: "Original", designation: "Reserve" },
+    bottle: { volumeMl: 750 },
+  };
+  const issue = { path: "wine.vintageYear", rawValue: "202?", message: "Check year" };
+  sqlite
+    .prepare(`INSERT INTO bottle_capture_runs(id,capture_id,status,extractor_version,prompt_version,schema_version,import_candidate_json,extraction_r2_key)
+    VALUES ('run','capture','needs_review','test','v1','v1',?,'internal-key')`)
+    .run(
+      JSON.stringify({
+        ...extraction,
+        validationIssues: [issue],
+        rawSuggestion: { private: "internal-artifact" },
+      }),
+    );
+  const list = await call("cellar.list_captures", {});
+  assert.deepEqual(
+    z
+      .object({ captures: z.array(z.object({ captureId: z.string() })) })
+      .parse(list.structuredContent).captures,
+    [{ captureId: "capture" }],
+  );
+  assert.equal((await call("cellar.get_capture_review", { captureId: "hidden" })).isError, true);
+  const content = z.record(z.string(), z.unknown());
+  const read = content.parse(
+    (await call("cellar.get_capture_review", { captureId: "capture" })).structuredContent,
+  );
+  assert.deepEqual(read["extractedCandidate"], extraction);
+  assert.deepEqual(read["extractionIssues"], [issue]);
+  assert.equal(read["reviewRevision"], 0);
+  assert.equal(read["confirmationUrl"], "http://localhost/?area=captures");
+  assert.doesNotMatch(JSON.stringify(read), /internal-key|internal-artifact/u);
+  const candidate = {
+    ...extraction,
+    wine: { ...extraction.wine, wineryName: "Corrected", vintageYear: 2021 },
+  };
+  const save = { captureId: "capture", expectedRevision: 0, candidate };
+  assert.equal(
+    (await call("cellar.save_capture_review", { ...save, captureId: "hidden" })).isError,
+    true,
+  );
+  sqlite.exec("UPDATE site_memberships SET role='viewer'");
+  assert.equal((await call("cellar.save_capture_review", save)).isError, true);
+  sqlite.exec("UPDATE site_memberships SET role='editor'");
+  sqlite.exec(
+    "CREATE TRIGGER fail_capture_audit BEFORE UPDATE ON mcp_tool_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END",
+  );
+  assert.equal((await call("cellar.save_capture_review", save)).isError, true);
+  assert.equal(
+    sqlite.prepare("SELECT review_revision FROM bottle_captures WHERE id='capture'").get()?.[
+      "review_revision"
+    ],
+    0,
+  );
+  sqlite.exec("DROP TRIGGER fail_capture_audit");
+  const saved = await call("cellar.save_capture_review", save);
+  assert.notEqual(saved.isError, true, JSON.stringify(saved));
+  assert.deepEqual(content.parse(saved.structuredContent)["after"], {
+    status: "needs_review",
+    reviewRevision: 1,
+  });
+  assert.equal((await call("cellar.save_capture_review", save)).isError, true);
+  const reread = content.parse(
+    (await call("cellar.get_capture_review", { captureId: "capture" })).structuredContent,
+  );
+  assert.deepEqual(reread["reviewCandidate"], candidate);
+  assert.deepEqual(reread["extractedCandidate"], extraction);
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) AS n FROM mcp_tool_audit_events WHERE tool_name='cellar.save_capture_review' AND target_persisted_id='capture'",
+      )
+      .get()?.["n"],
+    1,
+  );
+  assert.equal(
+    (await request("/bottle-captures/capture/import", "POST", { expectedReviewRevision: 0 }))
+      .status,
+    409,
+  );
+  assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottles").get()?.["n"], 1);
+  const imported = await request("/bottle-captures/capture/import", "POST", {
+    expectedReviewRevision: 1,
+  });
+  assert.equal(imported.status, 200, await imported.clone().text());
+  assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottles").get()?.["n"], 3);
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) AS n FROM bottles JOIN wine_vintages ON bottles.wine_vintage_id=wine_vintages.id JOIN wineries ON wine_vintages.winery_id=wineries.id WHERE wineries.name='Corrected' AND wine_vintages.vintage_year=2021",
+      )
+      .get()?.["n"],
+    2,
+  );
+  assert.equal(
+    (await call("cellar.save_capture_review", { ...save, expectedRevision: 1 })).isError,
+    true,
   );
 });

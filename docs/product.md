@@ -201,6 +201,10 @@ MCP tools must authenticate callers, enforce site membership, return structured 
 
 MCP read and write authorisation requires valid Clerk OAuth identity plus server-side site membership and domain-action checks. Audit event identifiers stay server-private and are not exposed in tool results. Mutation results return committed before/after facts and affected-record counts.
 
+Manual stock entry accepts either an existing wine ID or new wine details. Each distinct addition uses a fresh operation ID. Retrying the same addition returns its original receipt, including the bottle IDs and affected count. Bottle search defaults to in-stock bottles and accepts `status: "consumed"` to find a bottle to restore.
+
+MCP clients can list photo captures, read the original extracted facts and saved draft, and replace the complete draft at the revision they read. The user confirms the wine and quantity in the browser’s Captures screen before a photo capture adds stock.
+
 The primary MCP client is ChatGPT. Tool results treat `structuredContent` as the canonical data channel and keep textual content terse instead of duplicating serialized JSON.
 
 ## Non-Functional Requirements

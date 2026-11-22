@@ -97,7 +97,7 @@ export const patchBottleSchema = z.object({
   awards: z.array(wineAwardInputSchema).max(24).optional(),
 });
 
-const bottleAdditionResultSchema = z.object({
+export const bottleAdditionResultSchema = z.object({
   bottleIds: z.array(z.string()).min(1).readonly(),
   siteId: z.string(),
   storageLocationId: z.string().nullable(),
