@@ -7,6 +7,8 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   envPrefix: ["VITE_", "CLERK_PUBLISHABLE_KEY"],
+  // The source-built theme imports the Lucide barrel. Prebundle it for the dev server.
+  optimizeDeps: { include: ["@astryxdesign/theme-neutral > lucide-react"] },
   server: {
     warmup: { clientFiles: ["./src/main.tsx", "./src/App.tsx", "./src/InventoryView.tsx"] },
   },
