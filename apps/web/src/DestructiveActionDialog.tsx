@@ -34,6 +34,7 @@ export function DestructiveActionDialog({
   const actionRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const fallbackReturnFocusRef = useRef<HTMLElement | null>(null);
+  const afterCloseRef = useRef<(() => void) | null>(null);
   const descriptionId = useId();
 
   useEffect(() => {
@@ -87,6 +88,10 @@ export function DestructiveActionDialog({
     return () => {
       document.removeEventListener("keydown", trapFocus);
       document.removeEventListener("focusin", containFocus);
+      // The owner has committed the close and the modal no longer traps focus.
+      const afterClose = afterCloseRef.current;
+      afterCloseRef.current = null;
+      afterClose?.();
     };
   }, [isOpen]);
 
@@ -126,19 +131,18 @@ export function DestructiveActionDialog({
   }
 
   function closeAndRestoreFocus(outcome: "confirmed" | "cancelled"): void {
+    afterCloseRef.current = () => {
+      const trigger = returnFocusRef?.current ?? fallbackReturnFocusRef.current;
+      fallbackReturnFocusRef.current = null;
+      const connectedTrigger = trigger?.isConnected === true ? trigger : null;
+      const fallback = fallbackFocus?.();
+      // A committed deletion can leave its trigger mounted until the next catalogue render.
+      const target =
+        outcome === "confirmed" ? (fallback ?? connectedTrigger) : (connectedTrigger ?? fallback);
+      target?.focus();
+      if (outcome === "confirmed") onSuccess?.();
+    };
     onOpenChange(false);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const trigger = returnFocusRef?.current ?? fallbackReturnFocusRef.current;
-        const connectedTrigger = trigger?.isConnected === true ? trigger : null;
-        const fallback = fallbackFocus?.();
-        // A committed deletion can leave its trigger mounted until the next catalogue render.
-        const target =
-          outcome === "confirmed" ? (fallback ?? connectedTrigger) : (connectedTrigger ?? fallback);
-        target?.focus();
-        if (outcome === "confirmed") onSuccess?.();
-      });
-    });
   }
 
   if (!isOpen) {
