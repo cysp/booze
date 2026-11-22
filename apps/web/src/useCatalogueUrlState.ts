@@ -84,6 +84,8 @@ export function useCatalogueUrlState(): CatalogueUrlController {
       historyMode: "push" | "replace",
     ): void => {
       const next = { ...stateRef.current, [key]: value };
+      if (key === "siteIdFilter" && value !== "" && value !== stateRef.current.siteIdFilter)
+        next.storageLocationIdFilter = "";
       stateRef.current = next;
       setState(next);
       const nextUrl = catalogueUrlWithState(new URL(window.location.href), next);

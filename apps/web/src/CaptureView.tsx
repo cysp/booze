@@ -451,9 +451,9 @@ function CaptureDashboard({
           />
         )}
       </div>
-      {isLoading ? (
-        <p role="status">Loading captures…</p>
-      ) : allCount === 0 && visibleCaptures.length === 0 ? (
+      {isLoading ? <p role="status">Loading captures…</p> : null}
+      {isLoading && visibleCaptures.length === 0 ? null : allCount === 0 &&
+        visibleCaptures.length === 0 ? (
         <EmptyState
           description="Submit bottle photos here and imported bottles will appear in inventory."
           title="No captures yet"

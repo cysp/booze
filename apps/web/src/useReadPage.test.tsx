@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { useReadPage } from "./useReadPage.ts";
+import { fetchCatalogueQuery, useReadPage } from "./useReadPage.ts";
 const schema = z.object({
   data: z.array(z.object({ id: z.string(), value: z.number() })),
   totalCount: z.number(),
@@ -16,6 +16,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("bounded page reads", () => {
+  it("keeps requests for long stored IDs and continuation tokens within the edge URL limit", async () => {
+    const id = "蓮".repeat(3000);
+    const token = "a".repeat(17000);
+    const fetch = vi.fn(async () => page("item"));
+    vi.stubGlobal("fetch", fetch);
+    const url = new URL("/api/bottle-capture-statuses", window.location.origin);
+    url.searchParams.append("captureId", id);
+    url.searchParams.append("captureId", "second");
+    await fetchCatalogueQuery(url, { actor: "first" });
+    expect(fetch).toHaveBeenCalledWith("/api/bottle-capture-statuses/query", {
+      method: "POST",
+      headers: { actor: "first", "content-type": "application/json" },
+      body: JSON.stringify({ captureIds: [id, "second"] }),
+    });
+    const list = new URL("/api/bottle-captures?view=action", window.location.origin);
+    list.searchParams.set("pageToken", token);
+    await fetchCatalogueQuery(list, { actor: "first" });
+    expect(fetch).toHaveBeenCalledWith("/api/bottle-captures/query", {
+      method: "POST",
+      headers: { actor: "first", "content-type": "application/json" },
+      body: JSON.stringify({ view: "action", pageToken: token }),
+    });
+  });
+
   it("does not fetch more pages until requested, appends by ID, and refreshes from the first page", async () => {
     const requests: string[] = [];
     vi.stubGlobal(

@@ -18,6 +18,24 @@ export type ReadPageController<Page> = {
   readonly loadMore: () => Promise<RefreshResult>;
 };
 
+// The Worker limits the whole request URL to 16 KiB. Legacy stored IDs can
+// exceed that once encoded in a continuation token or a list of capture IDs.
+export async function fetchCatalogueQuery(
+  url: URL,
+  headers: Record<string, string>,
+): Promise<Response> {
+  if (url.href.length < 16 * 1024) return fetch(url.pathname + url.search, { headers });
+  const body =
+    url.pathname === "/api/bottle-capture-statuses"
+      ? { captureIds: url.searchParams.getAll("captureId") }
+      : Object.fromEntries(url.searchParams);
+  return fetch(url.pathname + "/query", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** Owns one bounded query. A refresh replaces its pages; only explicit loadMore appends. */
 export function useReadPage<Page extends ReadPage>({
   active,
@@ -68,9 +86,7 @@ export function useReadPage<Page extends ReadPage>({
         currentRequest.current.path === path &&
         currentRequest.current.getAuthHeaders === getAuthHeaders;
       try {
-        const response = await fetch(`${parameters.pathname}${parameters.search}`, {
-          headers: await getAuthHeaders(),
-        });
+        const response = await fetchCatalogueQuery(parameters, await getAuthHeaders());
         if (!response.ok) throw new Error("Read failed");
         const parser = typeof schema === "function" ? await schema() : schema;
         const next = parser.parse(await response.json());
