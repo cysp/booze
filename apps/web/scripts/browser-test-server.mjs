@@ -4,7 +4,11 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { json } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
+
+import { labelExtractionFixture } from "../test/label-extraction.ts";
 
 const directory = process.env.BOOZE_BROWSER_TEST_STATE;
 if (
@@ -67,6 +71,41 @@ async function stop() {
   }
 }
 
+const gatewayPrompt = z.object({
+  messages: z.array(
+    z.object({ role: z.string(), content: z.union([z.string(), z.array(z.unknown())]) }),
+  ),
+});
+const jpegPart = z.object({
+  type: z.literal("image_url"),
+  image_url: z.object({ url: z.string().startsWith("data:image/jpeg;base64,/9j/") }),
+});
+
+/** @param {import("node:http").IncomingMessage} request @param {import("node:http").ServerResponse} response */
+async function serveLabelFixture(request, response) {
+  if (request.method !== "POST") {
+    response.writeHead(405).end();
+    return;
+  }
+  const { messages } = gatewayPrompt.parse(await json(request));
+  const imageReceived = messages.some(
+    ({ role, content }) =>
+      role === "user" &&
+      Array.isArray(content) &&
+      content.some((part) => jpegPart.safeParse(part).success),
+  );
+  if (!imageReceived) {
+    response.writeHead(422).end("Expected a JPEG from the local Images binding");
+    return;
+  }
+  response.setHeader("content-type", "application/json");
+  response.end(
+    JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(labelExtractionFixture()) } }],
+    }),
+  );
+}
+
 try {
   const migration = spawnSync(
     process.execPath,
@@ -86,7 +125,21 @@ try {
   );
   if (migration.status !== 0) throw new Error("Local browser-test migrations failed");
   const { createServer } = await import("vite");
-  server = await createServer({ server: { host: "127.0.0.1", port: 4174, strictPort: true } });
+  server = await createServer({
+    plugins: [
+      {
+        name: "browser-test-label-gateway",
+        configureServer(vite) {
+          vite.middlewares.use("/__test__/label-gateway", (request, response) => {
+            void serveLabelFixture(request, response).catch(() => {
+              response.writeHead(400).end("Malformed local label request");
+            });
+          });
+        },
+      },
+    ],
+    server: { host: "127.0.0.1", port: 4174, strictPort: true },
+  });
   await server.listen();
   server.printUrls();
 } catch (error) {

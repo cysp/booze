@@ -190,3 +190,74 @@ test("retries a lost addition acknowledgement with the committed native D1 recei
   await page.reload();
   await expect(page.getByText("2 bottles shown", { exact: true }).last()).toBeVisible();
 });
+
+test("reviews a photo capture before committing the corrected bottles through the local Worker", async ({
+  page,
+  localCatalogue,
+}) => {
+  const { firstLocationId, siteId, siteName } = localCatalogue;
+  const photo = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4c+cOAAUsApUYk4oFAAAAAElFTkSuQmCC",
+    "base64",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { exact: true, name: "Capture" }).click();
+  await page.getByRole("combobox", { name: "Bottle location" }).click();
+  await page.getByRole("option", { exact: true, name: `${siteName} / First rack` }).click();
+  await page.locator("input[name='quantity']").fill("2");
+  await page.locator("#capture-bottle-photos").setInputFiles({
+    buffer: photo,
+    mimeType: "image/png",
+    name: "label.png",
+  });
+
+  const [submission] = await Promise.all([
+    page.waitForResponse("**/api/additions/bottle-captures"),
+    page.getByRole("button", { exact: true, name: "Submit capture" }).click(),
+  ]);
+  expect(submission.status(), await submission.text()).toBe(201);
+  const { captureId } = z
+    .object({ data: z.object({ captureId: z.string() }) })
+    .parse(await submission.json()).data;
+  await expect(page.getByRole("button", { name: "Review capture" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Review capture" }).click();
+  const producer = page.getByRole("textbox", { exact: true, name: "Producer / winery" });
+  await expect(producer).toHaveValue("Producer");
+  const link = page.getByRole("link", { name: "Open original photo label.png" });
+  const originalUrl = z.string().parse(await link.getAttribute("href"));
+  const original = await page.request.get(originalUrl);
+  expect(original.status()).toBe(200);
+  expect(await original.body()).toEqual(photo);
+  expect(bottleRows(siteId)).toEqual([]);
+
+  await producer.fill("Corrected producer");
+  const [saved] = await Promise.all([
+    page.waitForResponse(`**/api/bottle-captures/${captureId}/review`),
+    page.getByRole("button", { exact: true, name: "Save corrections" }).click(),
+  ]);
+  expect(saved.status(), await saved.text()).toBe(200);
+  expect(bottleRows(siteId)).toEqual([]);
+  const [confirmation] = await Promise.all([
+    page.waitForResponse(`**/api/bottle-captures/${captureId}/import`),
+    page.getByRole("button", { exact: true, name: "Add bottles as new wine" }).click(),
+  ]);
+  expect(confirmation.status(), await confirmation.text()).toBe(200);
+  expect(
+    nativeRows(
+      `SELECT w.name AS producer, l.storage_location_id, b.status
+       FROM bottles b JOIN wine_vintages v ON v.id = b.wine_vintage_id
+       JOIN wineries w ON w.id = v.winery_id JOIN bottle_locations l ON l.bottle_id = b.id
+       WHERE b.site_id = ?`,
+      siteId,
+    ),
+  ).toEqual(
+    Array.from({ length: 2 }, () => ({
+      producer: "Corrected producer",
+      status: "in_stock",
+      storage_location_id: firstLocationId,
+    })),
+  );
+});

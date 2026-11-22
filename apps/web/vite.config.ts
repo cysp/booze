@@ -26,7 +26,10 @@ export default defineConfig({
             configPath: "wrangler.jsonc",
             config(config) {
               // Mutate these complete maps: returning partial maps would merge file vars back in.
-              config.vars = {};
+              config.vars = {
+                AI_GATEWAY_URL: "http://127.0.0.1:4174/__test__/label-gateway",
+                CF_AIG_TOKEN: "local-browser-test",
+              };
               config.secrets = { required: [] };
               config.triggers = { crons: [] };
             },
