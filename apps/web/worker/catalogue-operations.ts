@@ -22,6 +22,10 @@ import {
   wineInputSchema,
   winePatchInputSchema,
 } from "../shared/catalogue-inputs.ts";
+import {
+  criticReviewResourceSchema,
+  wineAwardResourceSchema,
+} from "../shared/catalogue-resources.ts";
 import { entityIdSchema } from "../shared/entity-id.ts";
 import { formatWineDisplayName, hasWineIdentity } from "../shared/wine-identity.ts";
 import { additionReceiptStatement, getAdditionReceipt } from "./addition-receipts.ts";
@@ -85,6 +89,8 @@ export const patchBottleSchema = z.object({
   wineEditScope: z.enum(["shared", "bottle"]).optional(),
   expectedWineVintageId: entityIdSchema.optional(),
   expectedAffectedBottleCount: z.number().int().min(1).optional(),
+  expectedCriticReviews: z.array(criticReviewResourceSchema).readonly().optional(),
+  expectedAwards: z.array(wineAwardResourceSchema).readonly().optional(),
   allowUnidentified: z.boolean().optional(),
   labelExtraction: createBottleSchema.shape.labelExtraction,
   criticReviews: z.array(criticReviewInputSchema).max(24).optional(),
@@ -722,6 +728,31 @@ async function existingWine({
   return { wineryId: row.wineryId, wineVintageId, statements: [] };
 }
 
+// The browser sends the collection it displayed when opening an editor.
+// Compare stored facts inside the same transaction that replaces those rows.
+function unchangedEvidence(
+  table: typeof criticReviews | typeof wineAwards,
+  wineId: string,
+  expected: readonly unknown[] | undefined,
+): SQL {
+  if (expected === undefined) return sql`1`;
+  const columns = Object.entries(getTableColumns(table)).filter(
+    ([key]) => key !== "createdByUserId",
+  );
+  const stored = sql.join(
+    columns.map(([, column]) => sql`${column}`),
+    sql`, `,
+  );
+  const observed = sql.join(
+    columns.map(([key]) => sql`json_extract(value, ${"$." + key})`),
+    sql`, `,
+  );
+  return sql`(with observed as (select value from json_each(${JSON.stringify(expected)})),
+    current_rows as (select ${stored} from ${table} where ${table.wineVintageId} = ${wineId})
+    select (select count(*) from current_rows) = (select count(*) from observed)
+      and not exists(select * from current_rows except select ${observed} from observed))`;
+}
+
 function wineEditGuard({
   database,
   bottleId,
@@ -729,12 +760,14 @@ function wineEditGuard({
   expectedWineVintageId,
   expectedCount,
   expectedIdentity,
+  evidence,
 }: {
   readonly database: BoozeDatabase;
   readonly bottleId: string;
   readonly siteId: string;
   readonly expectedWineVintageId: string;
   readonly expectedCount: number | undefined;
+  readonly evidence?: Pick<BottlePatch, "expectedCriticReviews" | "expectedAwards">;
   readonly expectedIdentity: Awaited<ReturnType<typeof wineInputForVintage>> | undefined;
 }) {
   // A stale selection yields NULL for a required column before the ID conflict
@@ -747,6 +780,8 @@ function wineEditGuard({
       wineVintageId: sql`(select id from wine_vintages where id = ${expectedWineVintageId} and site_id = ${siteId}
       and exists (select 1 from bottles where id = ${bottleId} and wine_vintage_id = ${expectedWineVintageId})
       and (${expectedCount ?? null} is null or (select count(*) from bottles where site_id = ${siteId} and wine_vintage_id = ${expectedWineVintageId}) = ${expectedCount ?? null})
+      and ${unchangedEvidence(criticReviews, expectedWineVintageId, evidence?.expectedCriticReviews)}
+      and ${unchangedEvidence(wineAwards, expectedWineVintageId, evidence?.expectedAwards)}
       and ${expectedIdentity === undefined ? sql`1` : unchangedWineIdentity(expectedIdentity)})`,
     })
     .onConflictDoNothing({ target: bottles.id });
@@ -910,6 +945,7 @@ async function prepareEditedWine({
           bottleId,
           siteId: existing.siteId,
           expectedWineVintageId: existing.wineVintageId,
+          evidence: payload,
           expectedCount:
             payload.wineEditScope === "shared" ? payload.expectedAffectedBottleCount : undefined,
           expectedIdentity:

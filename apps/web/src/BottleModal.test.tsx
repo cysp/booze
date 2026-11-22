@@ -29,7 +29,9 @@ function renderAction(
   action: BottleFormAction,
   onSubmit = vi.fn<(input: BottleModalSubmit) => Promise<BottleModalSubmitResult>>(successfulSave),
 ) {
+  const onClose = vi.fn<() => void>();
   return {
+    onClose,
     onSubmit,
     ...render(
       <BottleModal
@@ -38,7 +40,7 @@ function renderAction(
         isSaving={false}
         locations={locationsFixture}
         sites={sitesFixture}
-        onClose={close}
+        onClose={onClose}
         onSubmit={onSubmit}
       />,
     ),
@@ -411,7 +413,7 @@ describe("explicit wine operations", () => {
   });
   it("saves manual producer and grape facts without AI or an invented designation", async () => {
     const user = userEvent.setup();
-    const { onSubmit } = renderAction({
+    const { onSubmit, onClose } = renderAction({
       kind: "add",
       form: {
         ...initialFormState,
@@ -423,6 +425,7 @@ describe("explicit wine operations", () => {
     expect(screen.getByText("Catalogue title: RIKARD Shiraz")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Designation (optional)" })).not.toBeRequired();
     await user.click(screen.getByRole("button", { name: "Save bottle" }));
+    expect(onClose).not.toHaveBeenCalled();
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "add",

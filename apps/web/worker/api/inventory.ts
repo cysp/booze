@@ -10,7 +10,7 @@ import {
 import { and, asc, desc, eq, gt, lt, or, sql, type SQL } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import type { BottleResource } from "../../shared/catalogue-resources.ts";
+import { grapeConstituentSchema, type BottleResource } from "../../shared/catalogue-resources.ts";
 import {
   calculateDrinkStatus,
   drinkStatuses,
@@ -178,15 +178,25 @@ export async function getBottle({
 }): Promise<BottleResource> {
   const [result] = await authorisedBottleQuery({
     database,
-    columns: bottleColumns,
+    columns: {
+      ...bottleColumns,
+      grapeVarieties:
+        sql<string>`(select json_group_array(json_object('name', grape.name, 'percentage', constituent.percentage, 'blendText', constituent.blend_text) order by grape.name)
+        from wine_constituents constituent join grape_varieties grape on grape.id = constituent.grape_variety_id
+        where constituent.site_id = ${wineVintages.siteId} and constituent.wine_vintage_id = ${wineVintages.id})`.as(
+          "grape_constituents",
+        ),
+    },
     userId,
     where: eq(bottles.id, bottleId),
   }).limit(1);
   const row = result?.resource;
   if (row === undefined) throw new HTTPException(404, { message: "Bottle not found" });
+  const grapeConstituents = z.array(grapeConstituentSchema).parse(JSON.parse(row.grapeVarieties));
   return {
     ...row,
-    grapeVarieties: readGrapeVarieties(row.grapeVarieties),
+    grapeConstituents,
+    grapeVarieties: grapeConstituents.map((grape) => grape.name),
     ...(await readWineEvidence({ database, userId, wineVintageId: row.wineVintageId })),
   };
 }

@@ -28,6 +28,7 @@ describe("read-only bottle details", () => {
     const item = inventoryItemFixture({
       volumeMl: 75_000,
       alcoholPercent: 140,
+      grapeConstituents: [{ name: "Shiraz", percentage: 73.5, blendText: "Estate row" }],
       vintageYear: 1700,
       bottleNumber: "Physical reference A",
       labelText: "Original label\nOriginal spelling",
@@ -75,6 +76,7 @@ describe("read-only bottle details", () => {
     expect(screen.getByRole("dialog", { name: "Bottle details" })).toBeVisible();
     expect(screen.getByText("75000")).toBeVisible();
     expect(screen.getByText("140")).toBeVisible();
+    expect(screen.getByText("Shiraz 73.5% Estate row")).toBeVisible();
     expect(screen.getByText("Physical reference A")).toBeVisible();
     for (const text of [
       "Original physical note",

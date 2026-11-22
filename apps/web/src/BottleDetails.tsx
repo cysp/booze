@@ -200,7 +200,16 @@ export function BottleDetails({
             ["Label / brand", item.brandName],
             ["Designation", item.designation],
             ["Vintage", item.vintageLabel],
-            ["Grape varieties", item.grapeVarieties.join(", ")],
+            [
+              "Grape varieties",
+              (
+                item.grapeConstituents?.map(({ name, percentage, blendText }) =>
+                  [name, percentage === null ? null : `${percentage}%`, blendText]
+                    .filter(Boolean)
+                    .join(" "),
+                ) ?? item.grapeVarieties
+              ).join(", "),
+            ],
             ["Country", item.country],
             ["Region", item.region],
             ["Appellation", item.appellation],

@@ -420,6 +420,9 @@ function validateWineInput(wine: WineInput, updates: WineUpdates, overwriteExist
     });
   }
   if (
+    (!overwriteExisting ||
+      updates.drinkFromYear !== undefined ||
+      updates.drinkToYear !== undefined) &&
     wine.drinkFromYear !== null &&
     wine.drinkFromYear !== undefined &&
     wine.drinkToYear !== null &&
@@ -429,7 +432,12 @@ function validateWineInput(wine: WineInput, updates: WineUpdates, overwriteExist
     throw new HTTPException(400, { message: "Drink window must end on or after it starts" });
   }
   const status = wineVintageStatus(wine);
-  if ((status === "year") !== (wine.vintageYear !== null && wine.vintageYear !== undefined)) {
+  if (
+    (!overwriteExisting ||
+      updates.vintageYear !== undefined ||
+      updates.vintageStatus !== undefined) &&
+    (status === "year") !== (wine.vintageYear !== null && wine.vintageYear !== undefined)
+  ) {
     throw new HTTPException(400, {
       message: "Choose a known year, non-vintage, or unknown vintage consistently",
     });
