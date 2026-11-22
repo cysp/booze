@@ -319,6 +319,8 @@ await describe("complete bottle operations", async () => {
         sourceUrl: "https://example.org/wine",
         grapeVarieties: ["Shiraz"],
       },
+      expectedCriticReviews: [],
+      expectedAwards: [],
       criticReviews: [{ reviewSourceName: "Critic", ratingText: "95" }],
       awards: [{ awardName: "Show", awardLevel: "Gold" }],
     });
@@ -356,6 +358,9 @@ await describe("complete bottle operations", async () => {
       editBottle(context, "bottle", { ...guard, expectedAwards: before.awards, awards: [] }),
       { status: 409 },
     );
+    for (const legacy of [{ criticReviews: [] }, { awards: [] }]) {
+      await assert.rejects(editBottle(context, "bottle", { ...guard, ...legacy }), { status: 409 });
+    }
     const current = await getBottle({ ...context, bottleId: "bottle" });
     assert.deepEqual(
       current.criticReviews.map((r) => r.ratingText),
