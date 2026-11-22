@@ -8,7 +8,8 @@ import { z } from "zod";
 import { catalogueCandidateSchema } from "../shared/catalogue-inputs.ts";
 
 import type { Bindings } from "./api/types.ts";
-import { defaultBottleExtractorConfig, type BottleExtractorResult } from "./bottle-ocr.ts";
+import { labelExtractionFixture } from "../test/label-extraction.ts";
+import { defaultBottleExtractorConfig } from "./bottle-ocr.ts";
 import { importReviewedCapture } from "./bottle-importer.ts";
 import { createD1Client } from "@chikachow/booze-db";
 import { asD1, migratedDatabase } from "./d1-support.ts";
@@ -67,7 +68,7 @@ await describe("capture Workflow draft creation", async () => {
       requests += 1;
       return Response.json({
         provider: "fixture",
-        choices: [{ message: { content: JSON.stringify(extraction()) } }],
+        choices: [{ message: { content: JSON.stringify(labelExtractionFixture()) } }],
       });
     });
     const output = await workflow.run(event("workflow"), fixtureSteps(new Map(), false));
@@ -232,7 +233,7 @@ await describe("capture Workflow draft creation", async () => {
       extractorId: "legacy",
       model: "old-model",
       diagnostics: [],
-      result: extraction(),
+      result: labelExtractionFixture(),
     });
     const output = await workflow.run(event("workflow"), fixtureSteps(cache));
     assert.deepEqual(output, { captureId: "capture", status: "needs_review" });
@@ -364,11 +365,11 @@ function fixtureSteps(cache = new Map<string, unknown>(), modelFixture = true): 
           extractorId: name,
           model: "fixture",
           diagnostics: [],
-          result: extraction(),
+          result: labelExtractionFixture(),
           configuration: defaultBottleExtractorConfig,
           rawResponse: JSON.stringify({
             provider: "fixture-provider",
-            choices: [{ message: { content: JSON.stringify(extraction()) } }],
+            choices: [{ message: { content: JSON.stringify(labelExtractionFixture()) } }],
           }),
         };
       }
@@ -382,39 +383,4 @@ function fixtureSteps(cache = new Map<string, unknown>(), modelFixture = true): 
   };
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The orchestration uses only the modeled do method.
   return step as unknown as WorkflowStep;
-}
-
-function extraction(): BottleExtractorResult {
-  return {
-    model_role: "extractor",
-    bottle_same_across_images: true,
-    raw_text_by_image: [],
-    fields: {
-      wineryName: textField("Producer"),
-      brandName: textField(null),
-      displayName: textField("Reserve"),
-      vintage: textField("2020"),
-      wineType: textField(null),
-      wineColor: textField(null),
-      grapeVarieties: { ...textField(null), value: [] },
-      country: textField(null),
-      region: textField(null),
-      appellation: textField(null),
-      classification: textField(null),
-      alcoholPercent: textField(null),
-      bottleVolumeMl: textField(null),
-      addressQualification: textField(null),
-      barcode: textField(null),
-      lotCode: textField(null),
-      description: textField(null),
-      drinkingAdvice: textField(null),
-    },
-    canonical_label_text_lines: ["Producer", "Reserve", "2020"],
-    warnings: [],
-    overall_confidence: 0.9,
-  };
-}
-
-function textField(value: string | null) {
-  return { value, confidence: 0.9, evidence: [], notes: [] };
 }

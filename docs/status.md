@@ -33,6 +33,6 @@ Hosted Clerk/OAuth configuration, real model accuracy and latency, and productio
 
 ## Development and deployment
 
-[README](../README.md) has local setup and verification commands. `pnpm check` runs formatting, lint, TypeScript, Worker/SQLite tests, React tests, theme validation, and Chrome interaction/accessibility tests. The browser gate includes manual stock lifecycles and lost-acknowledgement retries against the real local Worker and native D1 in disposable state, alongside the focused mocked interaction suite. A separate production build enforces client bundle budgets.
+[README](../README.md) has local setup and verification commands. `pnpm check` runs formatting, lint, TypeScript, Worker/SQLite tests, React tests, theme validation, and Chrome interaction/accessibility tests. The browser gate exercises manual stock changes, lost-acknowledgement retries, and photo capture through human confirmation against the local Worker and native D1. The photo case uses local R2, Images and Workflows with a fixed response from a loopback model gateway. A separate production build enforces client bundle budgets.
 
 GitHub CI gates production deployment. Deployment checks browser authentication configuration and builds before applying D1 migrations, then deploys and probes Worker liveness. See [deployment and recovery](deployment.md) for configuration, migration lineage, and backup procedures. Live Clerk, hosted extraction, and production recovery need environment-specific validation.
