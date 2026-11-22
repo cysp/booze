@@ -844,6 +844,18 @@ function hasWineEdits(payload: BottlePatch): boolean {
   );
 }
 
+function requireDisplayedEvidence(payload: BottlePatch): void {
+  if (
+    payload.wineEditScope === "shared" &&
+    ((payload.criticReviews !== undefined && payload.expectedCriticReviews === undefined) ||
+      (payload.awards !== undefined && payload.expectedAwards === undefined))
+  ) {
+    throw new HTTPException(409, {
+      message: "Reload the bottle details before replacing shared critic reviews or awards.",
+    });
+  }
+}
+
 function validateWineEditScope(payload: BottlePatch, existing: CurrentBottle) {
   if (!hasWineEdits(payload)) return;
   if (payload.wineEditScope === undefined || payload.expectedWineVintageId === undefined) {
@@ -860,6 +872,7 @@ function validateWineEditScope(payload: BottlePatch, existing: CurrentBottle) {
       message: "Confirm the number of bottles affected by this wine correction",
     });
   }
+  requireDisplayedEvidence(payload);
   const changesMetadata = payload.criticReviews !== undefined || payload.awards !== undefined;
   if (
     payload.wineVintageId !== undefined &&
