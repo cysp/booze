@@ -3,6 +3,8 @@ import { z } from "zod";
 import { entityIdSchema } from "../shared/entity-id.ts";
 import { readPageQuerySchema } from "./api/read-page-input.ts";
 
+export const captureListCursorSchema = z.strictObject({ createdAt: z.string(), id: z.string() });
+
 export const captureListQuerySchema = readPageQuerySchema.extend({
   // The action view includes captures still processing, as well as those needing a decision.
   view: z.enum(["action", "all"]).default("action"),
