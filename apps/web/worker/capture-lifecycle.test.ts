@@ -424,8 +424,6 @@ await describe("capture lifecycle recovery", async () => {
           captureId: "capture",
           database: createD1Client(asD1(sqlite)),
           expectedRevision: 0,
-          siteId: "site",
-          userId: userIdForClerkUser("dev:tester"),
           candidate: {
             wine: { wineryName: "Corrected Producer", designation: "Reserve" },
             bottle: {},

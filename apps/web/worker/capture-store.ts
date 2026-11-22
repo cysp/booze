@@ -1,4 +1,3 @@
-// oxlint-disable import/max-dependencies -- Capture persistence owns bounded read projections and guarded lifecycle mutations.
 import {
   bottleCaptureImages,
   bottleCaptureRuns,
@@ -14,9 +13,9 @@ import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql, type SQL } from "driz
 import { commitOperation } from "./operation-transaction.ts";
 import { HTTPException } from "hono/http-exception";
 
-
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
 import { captureReviewCandidateResourceSchema } from "../shared/capture-resources.ts";
+import {
   captureListCursorSchema,
   captureListQuerySchema,
   captureStatusQuerySchema,
@@ -27,6 +26,7 @@ import type {
   CapturePage,
   CaptureStatusSnapshot,
 } from "../shared/capture-read-resources.ts";
+import {
   isCaptureStatus,
   processingCaptureStatuses,
   type CaptureStatus,
