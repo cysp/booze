@@ -8,8 +8,6 @@ import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { TopNav, TopNavHeading } from "@astryxdesign/core/TopNav";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactElement } from "react";
 
-// oxlint-disable-next-line import/no-unassigned-import -- Vite loads the application stylesheet for its side effect.
-import "./App.css";
 import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
 import { useDebouncedQuery } from "./useDebouncedQuery.ts";
 import { useCatalogue } from "./useCatalogue.ts";

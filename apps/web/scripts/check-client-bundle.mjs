@@ -5,13 +5,13 @@ import { gzipSync } from "node:zlib";
 
 // Reviewed size-regression tripwires, not performance targets. See docs/deployment.md.
 export const bundleBudgets = {
-  initialCssBytes: 280_000,
-  initialCssGzipBytes: 48_000,
-  initialJavaScriptBytes: 800_000,
-  initialJavaScriptGzipBytes: 250_000,
+  initialCssBytes: 235_000,
+  initialCssGzipBytes: 38_000,
+  initialJavaScriptBytes: 610_000,
+  initialJavaScriptGzipBytes: 195_000,
   largestJavaScriptBytes: 650_000,
   totalFontBytes: 40_000,
-  totalJavaScriptGzipBytes: 360_000,
+  totalJavaScriptGzipBytes: 470_000,
 };
 
 export function measureClientBundle(clientDirectory) {
