@@ -12,11 +12,11 @@ import {
 import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { commitOperation } from "./operation-transaction.ts";
 import { HTTPException } from "hono/http-exception";
-import { z } from "zod";
 
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
 import { captureReviewCandidateResourceSchema } from "../shared/capture-resources.ts";
 import {
+  captureListCursorSchema,
   captureListQuerySchema,
   captureStatusQuerySchema,
   type CaptureListQuery,
@@ -70,7 +70,7 @@ export async function listBottleCaptures({
 }): Promise<CapturePage> {
   const input = { ...captureListQuerySchema.parse(query), userId };
   const cursor = readPaginationCursor({
-    cursorSchema: z.strictObject({ createdAt: z.string(), id: z.string() }),
+    cursorSchema: captureListCursorSchema,
     input,
     toolName: "bottle-captures",
   });
