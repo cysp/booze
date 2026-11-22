@@ -143,6 +143,9 @@ await describe("durable addition receipts", async () => {
       DB: asD1(sqlite),
       IMAGE_BUCKET: bucket,
       BOTTLE_CAPTURE_WORKFLOW: {
+        async get() {
+          return { status: async () => ({ status: "running" }) };
+        },
         async createBatch({
           instances: requested,
         }: {
@@ -207,6 +210,9 @@ await describe("durable addition receipts", async () => {
       DB: asD1(sqlite),
       IMAGE_BUCKET: bucket,
       BOTTLE_CAPTURE_WORKFLOW: {
+        async get() {
+          return { status: async () => ({ status: "running" }) };
+        },
         async createBatch({
           instances: requested,
         }: {

@@ -26,6 +26,7 @@ it("retains an uncertain bottle operation across retries and remount, blocks edi
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
+      expect(_url).toBe("/api/additions/bottles");
       if (typeof init.body !== "string") throw new Error("Expected JSON request body");
       const payload: unknown = JSON.parse(init.body);
       if (typeof payload !== "object" || payload === null)
@@ -77,6 +78,7 @@ it("retains uncertain photos and operation identity, and treats a confirmed capt
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
+      expect(_url).toBe("/api/additions/bottle-captures");
       if (!(init.body instanceof FormData)) throw new Error("Expected capture form data");
       bodies.push(init.body);
       if (!succeed) throw new Error("response lost");
@@ -222,4 +224,31 @@ it("keeps photos and identity for incomplete or unreadable saved capture respons
     Array.from({ length: 3 }, () => bodies[0]?.get("operationId")),
   );
   expect(hook.result.current.captureForm.quantity).toBe("1");
+});
+
+it("keeps the next capture draft when the preceding upload finishes", async () => {
+  const received = Promise.withResolvers<boolean>();
+  const ack = Promise.withResolvers<Response>();
+  vi.stubGlobal("fetch", async () => {
+    received.resolve(true);
+    return ack.promise;
+  });
+  const shared = context();
+  const hook = renderHook(() => useCaptureController(shared));
+  const original = { ...initialCaptureFormState, siteId: "site", quantity: "2" };
+  await act(async () => {
+    hook.result.current.setCaptureForm(original);
+  });
+  const next = { ...original, position: "Next shelf", quantity: "3" };
+  const done = act(async () => {
+    const pendingUpload = hook.result.current.submitCapture(original, [
+      new File(["photo"], "label.jpg", { type: "image/jpeg" }),
+    ]);
+    await received.promise;
+    hook.result.current.setCaptureForm(next);
+    ack.resolve(Response.json({ data: { intakeComplete: true } }, { status: 201 }));
+    expect((await pendingUpload).kind).toBe("submitted");
+  });
+  await done;
+  expect(hook.result.current.captureForm).toEqual(next);
 });

@@ -332,28 +332,35 @@ export async function saveCaptureReview({
   database,
   candidate,
   expectedRevision,
+  siteId,
+  userId,
 }: {
   readonly captureId: string;
   readonly database: BoozeDatabase;
   readonly candidate: CaptureReviewCandidate;
   readonly expectedRevision: number;
+  readonly siteId: string;
+  readonly userId: string;
 }): Promise<number> {
-  const [saved] = await database
-    .update(bottleCaptures)
-    .set({
-      reviewCandidateJson: JSON.stringify(candidate),
-      reviewRevision: sql`${bottleCaptures.reviewRevision} + 1`,
-      status: "needs_review",
-      updatedAt: sql`CURRENT_TIMESTAMP`,
-    })
-    .where(
-      and(
-        eq(bottleCaptures.id, captureId),
-        eq(bottleCaptures.reviewRevision, expectedRevision),
-        sql`${bottleCaptures.status} IN ('failed', 'needs_review')`,
-      ),
-    )
-    .returning({ revision: bottleCaptures.reviewRevision });
+  const [, [saved]] = await commitOperation({ database, userId, source: "http" }, siteId, [
+    database
+      .update(bottleCaptures)
+      .set({
+        reviewCandidateJson: JSON.stringify(candidate),
+        reviewRevision: sql`${bottleCaptures.reviewRevision} + 1`,
+        status: "needs_review",
+        updatedAt: sql`CURRENT_TIMESTAMP`,
+      })
+      .where(
+        and(
+          eq(bottleCaptures.id, captureId),
+          eq(bottleCaptures.siteId, siteId),
+          eq(bottleCaptures.reviewRevision, expectedRevision),
+          sql`${bottleCaptures.status} IN ('failed', 'needs_review')`,
+        ),
+      )
+      .returning({ revision: bottleCaptures.reviewRevision }),
+  ]);
   if (saved === undefined)
     throw new HTTPException(409, {
       message:

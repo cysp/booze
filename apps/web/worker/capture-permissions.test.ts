@@ -120,7 +120,7 @@ await describe("capture and site commit authorization", async () => {
 
   for (const [path, method, payload] of [
     [
-      "/bottles",
+      "/additions/bottles",
       "POST",
       {
         operationId: crypto.randomUUID(),
@@ -131,6 +131,8 @@ await describe("capture and site commit authorization", async () => {
     ],
     ["/bottle-captures/capture/retry", "POST", undefined],
     ["/bottle-captures/capture/import", "POST", {}],
+    ["/bottle-captures/capture/review", "PATCH", { expectedRevision: 0, candidate }],
+    ["/bottle-captures/capture", "DELETE", undefined],
   ] as const) {
     await it(`rolls back ${method} ${path} if permission is revoked before commit`, async () => {
       const fixture = setup();

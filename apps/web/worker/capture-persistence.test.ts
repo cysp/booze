@@ -189,7 +189,12 @@ await describe("capture persistence", async () => {
     const first = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     await updateCaptureStatus({ captureId: first.captureId, database, status: "failed" });
     const originalKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
-    await deleteBottleCaptureData({ captureId: first.captureId, database: asD1(sqlite) });
+    await deleteBottleCaptureData({
+      captureId: first.captureId,
+      database: asD1(sqlite),
+      siteId: "site",
+      userId: "user",
+    });
     const second = await createBottleCapture({ ...input, operationId: crypto.randomUUID() });
     assert.equal(second.status, "queued");
     const newKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
@@ -279,7 +284,12 @@ await describe("capture persistence", async () => {
       userId: "user",
     });
     assert.equal(
-      await deleteBottleCaptureData({ captureId: capture.captureId, database: asD1(sqlite) }),
+      await deleteBottleCaptureData({
+        captureId: capture.captureId,
+        database: asD1(sqlite),
+        siteId: "site",
+        userId: "user",
+      }),
       false,
     );
     assert.equal(

@@ -45,7 +45,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       data: await listBottleCaptures({ database, userId: authenticatedUser.userId }),
     });
   })
-  .post("/bottle-captures", async (context) => {
+  .on("POST", ["/bottle-captures", "/additions/bottle-captures"], async (context) => {
     const contentType = context.req.header("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
       throw new HTTPException(415, { message: "Use multipart/form-data for capture images" });
@@ -226,6 +226,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       captureId: capture.id,
       database,
       candidate: payload.candidate,
+      siteId: capture.siteId,
+      userId: user.userId,
       expectedRevision: payload.expectedRevision,
     });
     return context.json({ data: { reviewRevision, reviewCandidate: payload.candidate } });
@@ -343,6 +345,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
     const deleted = await deleteBottleCaptureData({
       captureId: capture.id,
       database: context.env.DB,
+      siteId: capture.siteId,
+      userId: authenticatedUser.userId,
     });
     if (!deleted) {
       throw new HTTPException(409, {

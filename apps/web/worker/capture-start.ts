@@ -7,7 +7,7 @@ const pendingStartupMessage =
   "Capture is queued, but extraction startup has not been confirmed. It will be tried again automatically.";
 const maximumLaunchesPerPass = 50;
 
-type CaptureWorkflow = Pick<Workflow<BottleCaptureWorkflowParams>, "createBatch">;
+type CaptureWorkflow = Pick<Workflow<BottleCaptureWorkflowParams>, "createBatch" | "get">;
 
 // A queued capture and its owner are the durable launch intent. D1 and
 // Workflows cannot commit together: retry this same ID after every uncertain
@@ -50,13 +50,31 @@ export async function ensureCaptureWorkflowStarted({
     const result = await workflow.createBatch({
       instances: [{ id: workflowInstanceId, params: { captureId } }],
     });
-    const confirmed =
-      result.created.some((instance) => instance.id === workflowInstanceId) ||
-      result.errors.some(
+    if (!result.created.some((instance) => instance.id === workflowInstanceId)) {
+      const alreadyExists = result.errors.some(
         (error) => error.index === 0 && error.id === workflowInstanceId && error.code === 10405,
       );
-    if (!confirmed)
-      throw new Error("Workflow creation was not confirmed", { cause: result.errors });
+      if (!alreadyExists)
+        throw new Error("Workflow creation was not confirmed", { cause: result.errors });
+      const instance = await workflow.get(workflowInstanceId);
+      const { status } = await instance.status();
+      if (status === "unknown") throw new Error("Existing Workflow status is unknown");
+      if (status === "errored" || status === "terminated" || status === "complete") {
+        const errorMessage =
+          "Extraction ended before it started processing this capture. Retry extraction.";
+        const [failed] = await database
+          .update(bottleCaptures)
+          .set({
+            status: "failed",
+            errorMessage,
+            errorDetailJson: null,
+            updatedAt: sql`CURRENT_TIMESTAMP`,
+          })
+          .where(intent)
+          .returning({ id: bottleCaptures.id });
+        return failed === undefined ? { workflowInstanceId } : { workflowInstanceId, errorMessage };
+      }
+    }
     await database
       .update(bottleCaptures)
       .set({ errorMessage: null, errorDetailJson: null })

@@ -70,7 +70,7 @@ function setup(
     body.set("quantity", "1");
     for (const file of input.files) body.append("images", file);
     return app.request(
-      "http://localhost/bottle-captures",
+      "http://localhost/additions/bottle-captures",
       { method: "POST", headers: { "x-dev-user": "tester" }, body },
       bindings,
     );
@@ -152,6 +152,36 @@ await describe("durable capture launch intent", async () => {
       );
     }
   });
+
+  for (const terminal of ["errored", "terminated", "complete"] as const) {
+    await it(`allows retry when the existing Workflow is ${terminal} but D1 is still queued`, async () => {
+      const fixture = setup();
+      const saved = await createBottleCapture(fixture.input);
+      await ensureCaptureWorkflowStarted({
+        captureId: saved.captureId,
+        database: fixture.input.database,
+        workflow: batchBinding(
+          async () => ({
+            created: [],
+            errors: [{ index: 0, id: saved.captureId, code: 10405, message: "exists" }],
+          }),
+          terminal,
+        ),
+      });
+      assert.equal(
+        fixture.sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"],
+        "failed",
+      );
+      const retry = await app.request(
+        `http://localhost/bottle-captures/${saved.captureId}/retry`,
+        { method: "POST", headers: { "x-dev-user": "tester" } },
+        fixture.bindings,
+      );
+      assert.equal(retry.status, 200);
+      assert.equal(fixture.launches.length, 1);
+      assert.notEqual(fixture.launches[0], saved.captureId);
+    });
+  }
 
   await it("keeps one Workflow ID when replay and maintenance overlap", async () => {
     const fixture = setup();
@@ -337,7 +367,11 @@ function batchBinding(
   createBatch: (input: {
     readonly instances: readonly { readonly id?: string }[];
   }) => Promise<unknown>,
-): Pick<Workflow, "createBatch"> {
+  status: InstanceStatus["status"] = "running",
+): Pick<Workflow, "createBatch" | "get"> {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The fixture returns the documented object-form Workflow createBatch results.
-  return { createBatch } as unknown as Pick<Workflow, "createBatch">;
+  return {
+    createBatch,
+    get: async () => ({ status: async () => ({ status }) }),
+  } as unknown as Pick<Workflow, "createBatch" | "get">;
 }
