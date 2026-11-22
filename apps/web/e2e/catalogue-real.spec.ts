@@ -40,7 +40,7 @@ test("persists physical bottle additions, moves, consumed history and restore th
   await fillAddition(page, siteName, 3);
   const addedResponse = page.waitForResponse(
     (response) =>
-      new URL(response.url()).pathname === "/api/bottles" && response.request().method() === "POST",
+      new URL(response.url()).pathname === "/api/additions/bottles" && response.request().method() === "POST",
   );
   await page.getByRole("button", { exact: true, name: "Save bottle" }).click();
   const response = await addedResponse;
@@ -140,7 +140,7 @@ test("retries a lost addition acknowledgement with the committed native D1 recei
   const { siteId, siteName } = localCatalogue;
   const payloads: string[] = [];
   const results: z.infer<typeof additionSchema>["data"][] = [];
-  await page.route("**/api/bottles", async (route) => {
+  await page.route("**/api/additions/bottles", async (route) => {
     if (route.request().method() !== "POST") {
       await route.continue();
       return;
