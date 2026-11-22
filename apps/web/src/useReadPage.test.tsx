@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { fetchCatalogueQuery, useReadPage } from "./useReadPage.ts";
+import { fetchCatalogueDetail, fetchCatalogueQuery, useReadPage } from "./useReadPage.ts";
 const schema = z.object({
   data: z.array(z.object({ id: z.string(), value: z.number() })),
   totalCount: z.number(),
@@ -16,6 +16,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("bounded page reads", () => {
+  it("uses body-based detail reads for long or dot-segment IDs and keeps ordinary reads cacheable", async () => {
+    const send = vi.fn(async () => Response.json({}));
+    vi.stubGlobal("fetch", send);
+    for (const resource of ["bottle-captures", "wines", "bottles"]) {
+      const collection = "/api/" + resource;
+      await fetchCatalogueDetail(collection, "ordinary", {});
+      expect(send).toHaveBeenLastCalledWith(collection + "/ordinary", { headers: {} });
+      for (const id of [".", "..", "蓮".repeat(3000)]) {
+        await fetchCatalogueDetail(collection, id, {});
+        expect(send).toHaveBeenLastCalledWith(
+          collection + "/detail",
+          expect.objectContaining({ method: "POST", body: JSON.stringify({ id }) }),
+        );
+      }
+    }
+  });
+
   it("keeps requests for long stored IDs and continuation tokens within the edge URL limit", async () => {
     const id = "蓮".repeat(3000);
     const token = "a".repeat(17000);

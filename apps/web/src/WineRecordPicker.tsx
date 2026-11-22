@@ -6,7 +6,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { wineDetailResponseSchema, wineOptionsPageSchema } from "../shared/wine-resources.ts";
 import { wineOptionLabel, type WineOption } from "../shared/wine-options.ts";
 import { useDebouncedQuery } from "./useDebouncedQuery.ts";
-import { useReadPage, type AuthHeadersProvider } from "./useReadPage.ts";
+import { fetchCatalogueDetail, useReadPage, type AuthHeadersProvider } from "./useReadPage.ts";
 
 const noAuth: AuthHeadersProvider = async () => ({});
 
@@ -57,9 +57,11 @@ export function WineRecordPicker({
     ) {
       void (async () => {
         try {
-          const response = await fetch(`/api/wines/${encodeURIComponent(selected)}`, {
-            headers: await getAuthHeaders(),
-          });
+          const response = await fetchCatalogueDetail(
+            "/api/wines",
+            selected,
+            await getAuthHeaders(),
+          );
           if (!response.ok) throw new Error("Wine unavailable");
           const { data } = wineDetailResponseSchema.parse(await response.json());
           if (current) {

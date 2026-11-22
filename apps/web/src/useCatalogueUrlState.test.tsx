@@ -11,6 +11,17 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+it("keeps long selections through reload without putting their IDs in the document request", () => {
+  const source = new URL("https://example.test/?ref=public#inventory");
+  const state = { ...catalogueStateFromUrl(source), siteIdFilter: "蓮".repeat(3000) };
+  const url = catalogueUrlWithState(source, state);
+  expect(url.pathname.length + url.search.length).toBeLessThan(16384);
+  expect(url.searchParams.get("ref")).toBe("public");
+  expect(catalogueStateFromUrl(new URL(url.href))).toEqual(state);
+  const cleared = catalogueUrlWithState(url, { ...state, siteIdFilter: "" });
+  expect(cleared.hash).toBe("#inventory");
+});
+
 describe("catalogue URL state", () => {
   it("clears a location from state and URL when another site is selected", () => {
     window.history.replaceState(null, "", "/?siteId=first&storageLocationId=rack");

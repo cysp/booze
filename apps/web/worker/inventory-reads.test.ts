@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createD1Client, wineVintages } from "@chikachow/booze-db";
+import { z } from "zod";
 import { Hono } from "hono";
 import { bottleResourceSchema } from "../shared/catalogue-resources.ts";
 import { catalogueSummarySchema } from "../shared/catalogue-summary.ts";
@@ -383,6 +384,40 @@ await describe("bounded authorized catalogue reads", async () => {
         .status,
       400,
     );
+  });
+
+  await it("reads selected bottle and wine details using opaque IDs from JSON", async (context) => {
+    const fixture = setup();
+    context.after(() => {
+      fixture.sqlite.close();
+    });
+    const wineId = "..";
+    const bottleId = "蓮🍷".repeat(2000);
+    fixture.sqlite
+      .prepare(
+        "INSERT INTO wine_vintages(id,site_id,base_name,display_name,vintage_label) VALUES(?,'site','Reserve','Opaque','Unknown')",
+      )
+      .run(wineId);
+    fixture.add(bottleId, wineId);
+    for (const [collection, id] of [
+      ["wines", wineId],
+      ["bottles", bottleId],
+    ] as const) {
+      const response = await app.request(
+        `http://localhost/${collection}/detail`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-dev-user": "reader" },
+          body: JSON.stringify({ id }),
+        },
+        { DB: fixture.d1 },
+      );
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(
+        z.object({ data: z.object({ id: z.string() }) }).parse(await response.json()).data.id,
+        id,
+      );
+    }
   });
 
   await it("accepts its own long cursor for an opaque stored Unicode ID", async (context) => {

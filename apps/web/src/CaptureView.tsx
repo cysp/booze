@@ -15,7 +15,7 @@ import type {
 } from "../shared/capture-import.ts";
 import { captureResourceSchema } from "../shared/capture-resources.ts";
 import type { CaptureSummary, CaptureCounts } from "../shared/capture-read-resources.ts";
-import type { AuthHeadersProvider } from "./useReadPage.ts";
+import { fetchCatalogueDetail, type AuthHeadersProvider } from "./useReadPage.ts";
 import { ReadPageStatus } from "./ReadPageStatus.tsx";
 import { formatWineLabel } from "../shared/wine-identity.ts";
 import { validateBottleQuantity } from "../shared/quantity.ts";
@@ -576,9 +576,11 @@ function CaptureCard({
       setDetailLoading(true);
       void (async () => {
         try {
-          const response = await fetch(`/api/bottle-captures/${encodeURIComponent(capture.id)}`, {
-            headers: await (getAuthHeaders ?? noAuth)(),
-          });
+          const response = await fetchCatalogueDetail(
+            "/api/bottle-captures",
+            capture.id,
+            await (getAuthHeaders ?? noAuth)(),
+          );
           if (!response.ok) throw new Error("Capture detail failed");
           const payload: unknown = await response.json();
           const data = captureResourceSchema.parse(candidateProperty(payload, "data"));

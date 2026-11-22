@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { entityIdSchema } from "../../shared/entity-id.ts";
 import { HTTPException } from "hono/http-exception";
 
 const maximumJsonBytes = 512 * 1024;
@@ -52,4 +54,9 @@ export async function readRequestJson(request: Request): Promise<unknown> {
   } catch (cause) {
     throw new HTTPException(400, { cause, message: "Request body must be valid UTF-8 JSON" });
   }
+}
+
+export async function readDetailId(request: Request, pathId: string | undefined): Promise<string> {
+  if (pathId !== undefined) return pathId;
+  return z.object({ id: entityIdSchema }).parse(await readRequestJson(request)).id;
 }
