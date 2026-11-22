@@ -92,7 +92,15 @@ await describe("capture review corrections", async () => {
       before,
     );
     assert.equal(
-      await reserveCaptureRetry({ captureId: "capture", database, workflowInstanceId: "retry" }),
+      await reserveCaptureRetry({
+        captureId: "capture",
+        database,
+        workflowInstanceId: "retry",
+        siteId: "site",
+        userId: userIdForClerkUser("dev:tester"),
+        expectedWorkflowInstanceId: null,
+        expectedReviewRevision: 1,
+      }),
       true,
     );
     const detail = await request("GET", "");

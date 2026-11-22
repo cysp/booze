@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-export const additionOperationIdSchema = z.uuid();
+export const additionOperationIdSchema = z.uuid({
+  error: (issue) =>
+    issue.input === undefined
+      ? "Reload the catalogue before adding bottles or submitting photos. Check your recent additions before trying again."
+      : undefined,
+});
 
 // Object field order is irrelevant; array order, including capture images, is evidence.
 export function canonicalAdditionInput(value: unknown): string {

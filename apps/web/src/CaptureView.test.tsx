@@ -597,3 +597,22 @@ it("retains incomplete submission photos and exposes deliberate start-another in
   expect(onCancelAddition).toHaveBeenCalledExactlyOnceWith("site-owner");
   expect(screen.getByText(/1 of 4 selected/u)).toBeVisible();
 });
+
+it("keeps a photo selected while the previous submission was pending", async () => {
+  const user = userEvent.setup();
+  const submitted = Promise.withResolvers<CaptureSubmitResult>();
+  const onSubmit = vi.fn(async () => submitted.promise);
+  renderCapture({ onSubmit });
+  const input = screen.getByLabelText(/Bottle photos/u);
+  await user.upload(input, photo("first.jpg"));
+  await user.click(screen.getByRole("button", { name: "Submit capture" }));
+  await user.upload(input, photo("second.jpg"));
+  submitted.resolve({ kind: "submitted", message: "Saved" });
+  await waitFor(() => {
+    expect(screen.queryAllByText("first.jpg")).toHaveLength(0);
+  });
+  expect(screen.getByText(/1 of 4 selected/u)).toBeVisible();
+  expect(screen.getByRole("list", { name: "Selected bottle photos" })).toHaveTextContent(
+    "second.jpg",
+  );
+});

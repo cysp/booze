@@ -118,7 +118,7 @@ export function CaptureArea({
     const result = await onSubmit(form, files);
     setSubmitResult(result);
     if (result.kind === "submitted" || result.kind === "saved_with_error") {
-      setFiles([]);
+      setFiles((current) => current.filter((file) => !files.includes(file)));
     }
   }
 
@@ -596,7 +596,7 @@ function CaptureCard({
         />
       ) : null}
       <div className="card-actions">
-        {canWrite && canReview ? (
+        {canWrite && (canReview || hasUnconfirmedLaunch(capture)) ? (
           <Button
             isDisabled={pendingAction !== null || hasUnsavedReview || isReviewBusy}
             isLoading={isCaptureAction(pendingAction, { kind: "retry" })}
@@ -652,8 +652,12 @@ function isCaptureAction(current: CaptureCardAction | null, expected: CaptureCar
   );
 }
 
+function hasUnconfirmedLaunch(capture: CaptureResource): boolean {
+  return capture.status === "queued" && capture.errorMessage !== null;
+}
+
 function isCaptureDeletable(capture: CaptureResource): boolean {
-  return captureStatus(capture.status).deletable;
+  return captureStatus(capture.status).deletable || hasUnconfirmedLaunch(capture);
 }
 
 function isActionableCapture(capture: CaptureResource): boolean {

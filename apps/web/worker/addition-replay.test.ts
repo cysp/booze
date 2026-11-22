@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Hono } from "hono";
+import { z } from "zod";
 import { userIdForClerkUser } from "./api/ids.ts";
 import { problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
@@ -137,11 +138,21 @@ await describe("durable addition receipts", async () => {
     );
     const { bucket, counts } = multipartBucket();
     let launches = 0;
+    const instances = new Set<string>();
     const bindings = {
       DB: asD1(sqlite),
       IMAGE_BUCKET: bucket,
       BOTTLE_CAPTURE_WORKFLOW: {
-        async create() {
+        async createBatch({
+          instances: requested,
+        }: {
+          readonly instances: readonly { readonly id: string }[];
+        }) {
+          const id = requested[0]?.id;
+          assert.ok(id !== undefined);
+          if (instances.has(id))
+            return { created: [], errors: [{ index: 0, id, code: 10405, message: "exists" }] };
+          instances.add(id);
           launches += 1;
           throw new Error("launch acknowledgement lost");
         },
@@ -162,13 +173,24 @@ await describe("durable addition receipts", async () => {
     };
     const first = await send();
     assert.equal(first.status, 201);
-    const original: unknown = await first.json();
+    const resultSchema = z.object({
+      data: z.object({
+        captureId: z.string(),
+        intakeComplete: z.boolean(),
+        errorMessage: z.string().optional(),
+      }),
+    });
+    const original = resultSchema.parse(await first.json());
     sqlite.exec(
       "UPDATE bottle_captures SET storage_location_id = NULL; DELETE FROM storage_locations",
     );
     const replay = await send();
     assert.equal(replay.status, 201);
-    assert.deepEqual(await replay.json(), original);
+    const replayed = resultSchema.parse(await replay.json());
+    assert.equal(replayed.data.captureId, original.data.captureId);
+    assert.equal(replayed.data.intakeComplete, true);
+    assert.match(original.data.errorMessage ?? "", /automatically/iu);
+    assert.equal(replayed.data.errorMessage, undefined);
     assert.equal(counts.completed, 1);
     assert.equal(launches, 1);
     assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottle_captures").get()?.["n"], 1);
@@ -180,13 +202,23 @@ await describe("durable addition receipts", async () => {
     const sqlite = setup();
     const { bucket, counts, objects } = multipartBucket();
     let launches = 0;
+    const instances = new Set<string>();
     const bindings = {
       DB: asD1(sqlite),
       IMAGE_BUCKET: bucket,
       BOTTLE_CAPTURE_WORKFLOW: {
-        async create({ id }: { readonly id: string }) {
+        async createBatch({
+          instances: requested,
+        }: {
+          readonly instances: readonly { readonly id: string }[];
+        }) {
+          const id = requested[0]?.id;
+          assert.ok(id !== undefined);
+          if (instances.has(id))
+            return { created: [], errors: [{ index: 0, id, code: 10405, message: "exists" }] };
+          instances.add(id);
           launches += 1;
-          return { id };
+          return { created: [{ id }], errors: [] };
         },
       },
     } as unknown as Bindings;

@@ -1,3 +1,5 @@
+// oxlint-disable import/max-dependencies -- Capture import commits permission, review ownership, inventory and its receipt together.
+import { commitOperation } from "./operation-transaction.ts";
 import { storedVintageLabel, storedVintageStatus } from "./api/wine-vintage.ts";
 import {
   bottleCaptureRuns,
@@ -160,6 +162,7 @@ export async function importReviewedCapture(
     readonly wineVintageId?: string | undefined;
     readonly workflowInstanceId: string | null;
     readonly expectedReviewRevision: number;
+    readonly userId: string;
   },
 ): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
   const {
@@ -193,6 +196,7 @@ export async function importReviewedCapture(
         matchResult,
         wineVintageId,
         expectedReviewRevision,
+        userId: input.userId,
       });
     } catch (error) {
       // A competing import or a lost commit acknowledgement may have completed
@@ -210,12 +214,14 @@ async function commitCaptureImport({
   matchResult,
   wineVintageId,
   expectedReviewRevision,
+  userId,
 }: {
   readonly input: CaptureImportInput;
   readonly claim: CaptureImportClaim;
   readonly matchResult: BottleMatchResult;
   readonly wineVintageId: string | undefined;
   readonly expectedReviewRevision?: number;
+  readonly userId?: string;
 }): Promise<Extract<BottleImportResult, { readonly kind: "imported" }>> {
   const { candidate, database, quantity } = input;
   const { captureId, runId, siteId } = claim;
@@ -247,7 +253,7 @@ async function commitCaptureImport({
     wineVintageId: vintage.wineVintageId,
   });
   try {
-    await database.batch([
+    const writes = [
       captureImportGuardStatement({
         claim,
         database,
@@ -285,7 +291,9 @@ async function commitCaptureImport({
           )
           .onConflictDoNothing({ target: bottleLocations.bottleId }),
       ),
-    ]);
+    ] as const;
+    if (userId === undefined) await database.batch(writes);
+    else await commitOperation({ database, userId, source: "http" }, siteId, writes);
   } catch (error) {
     if (isCaptureImportGuardFailure(error)) throw new CaptureImportConflictError(error);
     throw error;

@@ -15,6 +15,7 @@ import {
   additionOperationIdSchema,
   contentDigest,
 } from "../shared/addition-operation.ts";
+import { commitOperation } from "./operation-transaction.ts";
 import { additionReceiptStatement, getAdditionReceipt } from "./addition-receipts.ts";
 import { errorDetails, logError } from "./observability.ts";
 
@@ -112,7 +113,7 @@ export async function createBottleCapture(
     captureId = crypto.randomUUID();
     const id = captureId;
     try {
-      await database.batch([
+      await commitOperation({ database, userId, source: "http" }, siteId, [
         additionReceiptStatement(database, operation, { captureId }),
         database.insert(bottleCaptures).values({
           id,
