@@ -549,7 +549,9 @@ it.each([0, 1])(
     expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue(
       "My unsaved correction",
     );
-    await waitFor(() => expect(producer).toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => {
+      expect(producer).toHaveAttribute("aria-disabled", "true");
+    });
     expect(producer).toHaveAttribute("readonly");
     await user.type(producer, "unavailable edit");
     expect(producer).toHaveValue("My unsaved correction");
@@ -612,7 +614,9 @@ it("retains a local draft for reference when another editor imports the capture"
     "Unsubmitted bottle correction",
   );
   const notes = screen.getByRole("textbox", { name: "Bottle notes" });
-  await waitFor(() => expect(notes).toHaveAttribute("aria-disabled", "true"));
+  await waitFor(() => {
+    expect(notes).toHaveAttribute("aria-disabled", "true");
+  });
   expect(notes).toHaveAttribute("readonly");
   await user.type(notes, "unavailable edit");
   expect(notes).toHaveValue("Unsubmitted bottle correction");
