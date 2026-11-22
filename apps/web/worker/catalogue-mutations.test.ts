@@ -7,6 +7,7 @@ import { z } from "zod";
 import { createD1Client } from "@chikachow/booze-db";
 import { Hono } from "hono";
 
+import { bottleResourceSchema } from "../shared/catalogue-resources.ts";
 import { upsertSite } from "./api/auth.ts";
 import { createBottleStatements } from "./api/catalogue.ts";
 import { problemResponseForError } from "./api/http.ts";
@@ -498,6 +499,7 @@ await describe("catalogue mutation preservation", async () => {
     const before = db.prepare("SELECT id, award_name FROM wine_awards ORDER BY award_name").all();
     assert.equal(before.length, 2);
     const response = await editRequest(db, "PATCH", `/bottles/${id}`, {
+      expectedAwards: (await readBottleDetail(db, id)).awards,
       awards: awards.map((award) => ({ ...award, notes: "Updated" })),
     });
     assert.equal(response.status, 200);
@@ -512,6 +514,7 @@ await describe("catalogue mutation preservation", async () => {
     const id = await create(db, { wine });
     const response = await editRequest(db, "PATCH", `/bottles/${id}`, {
       status: "consumed",
+      expectedCriticReviews: [],
       criticReviews: [{ reviewSourceId: "unavailable", ratingText: "95 points" }],
     });
     assert.equal(response.status, 400);
@@ -523,7 +526,10 @@ await describe("catalogue mutation preservation", async () => {
     const award = { awardName: "Wine show", awardLevel: "Gold", provenance: "2024 results" };
     const id = await create(db, { wine, awards: [{ ...award, points: 95 }] });
     const before = db.prepare("SELECT id FROM wine_awards").get()?.["id"];
-    const response = await editRequest(db, "PATCH", `/bottles/${id}`, { awards: [award] });
+    const response = await editRequest(db, "PATCH", `/bottles/${id}`, {
+      expectedAwards: (await readBottleDetail(db, id)).awards,
+      awards: [award],
+    });
     assert.equal(response.status, 200);
     assert.deepEqual(
       { ...db.prepare("SELECT id, points, provenance FROM wine_awards").get() },
@@ -619,6 +625,16 @@ async function request(
     },
     bindings,
   );
+}
+
+async function readBottleDetail(db: DatabaseSync, id: string) {
+  const response = await app.request(
+    `http://localhost/bottles/${encodeURIComponent(id)}`,
+    { headers: { "x-dev-user": "tester" } },
+    { DB: asD1(db) },
+  );
+  assert.equal(response.status, 200);
+  return z.object({ data: bottleResourceSchema }).parse(await response.json()).data;
 }
 
 function count(db: DatabaseSync, table: string): number {

@@ -87,10 +87,15 @@ await it("round-trips opaque stored identifiers through HTTP evidence queries an
     ],
     "95",
   );
+  const bottle = await request(`/bottles/${encodeURIComponent(bottleId)}`);
+  assert.equal(bottle.status, 200);
+  const awardSnapshot = z.object({ data: z.object({ awards: z.array(z.unknown()) }) });
+  const { data } = awardSnapshot.parse(await bottle.json());
   const awardEdit = await request(`/bottles/${encodeURIComponent(bottleId)}`, "PATCH", {
     wineEditScope: "shared",
     expectedWineVintageId: wineId,
     expectedAffectedBottleCount: 1,
+    expectedAwards: data.awards,
     awards: [{ id: awardId, awardName: "Show", awardLevel: "Gold", notes: "Retained evidence" }],
   });
   assert.equal(awardEdit.status, 200, await awardEdit.text());
