@@ -808,7 +808,8 @@ test("recovers from a rejected cold workspace chunk", async ({ page }) => {
   await expectNoAxeViolations(page);
 
   await page.unroute(captureChunk);
-  await retry.click();
+  const [reloadedChunk] = await Promise.all([page.waitForResponse(captureChunk), retry.click()]);
+  expect(reloadedChunk.ok()).toBe(true);
   await expect(page.getByRole("heading", { name: "Photograph bottles" })).toBeVisible();
 });
 
