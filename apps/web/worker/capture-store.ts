@@ -743,13 +743,14 @@ async function upsertImageAsset({
 }): Promise<string> {
   const bytes = await file.arrayBuffer();
   const sha256 = await sha256Hex(bytes);
+  const samePhoto = and(eq(imageAssets.siteId, siteId), eq(imageAssets.sha256, sha256));
   const existing = await database
     .select({
       id: imageAssets.id,
       thumbnailR2Key: imageAssets.thumbnailR2Key,
     })
     .from(imageAssets)
-    .where(and(eq(imageAssets.siteId, siteId), eq(imageAssets.sha256, sha256)))
+    .where(samePhoto)
     .limit(1);
   const existingImage = existing[0];
   if (existingImage !== undefined) {
@@ -771,27 +772,13 @@ async function upsertImageAsset({
   // must not reuse a key that the durable deletion queue may still contain.
   const r2Key = `sites/${siteId}/images/${imageAssetId}${extensionForContentType(file.type)}`;
   await bucket.put(r2Key, bytes, { httpMetadata: { contentType: file.type } });
-  await database
-    .insert(imageAssets)
-    .values({
-      id: imageAssetId,
-      siteId,
-      sha256,
-      r2Key,
-      contentType: file.type,
-      sizeBytes: file.size,
-      uploadedByUserId: userId,
-    })
-    .onConflictDoNothing({ target: [imageAssets.siteId, imageAssets.sha256] });
-  const [stored] = await database
-    .select({ id: imageAssets.id })
-    .from(imageAssets)
-    .where(and(eq(imageAssets.siteId, siteId), eq(imageAssets.sha256, sha256)))
-    .limit(1);
-  if (stored === undefined) {
-    throw new Error("Uploaded image asset was not persisted");
-  }
-  if (stored.id !== imageAssetId) {
+  // SQLite serializes writes. Check and insert in one statement so this writer
+  // also works while a newer schema permits capture-owned copies of a photo.
+  const inserted = await database.run(sql`INSERT INTO image_assets
+    (id, site_id, sha256, r2_key, content_type, size_bytes, uploaded_by_user_id)
+    SELECT ${imageAssetId}, ${siteId}, ${sha256}, ${r2Key}, ${file.type}, ${file.size}, ${userId}
+    WHERE NOT EXISTS (SELECT 1 FROM ${imageAssets} WHERE ${samePhoto})`);
+  if (inserted.meta.changes === 0) {
     await database
       .insert(r2ObjectDeletionQueue)
       .values({
@@ -800,6 +787,12 @@ async function upsertImageAsset({
         sourceId: imageAssetId,
       })
       .onConflictDoNothing();
+    const [stored] = await database
+      .select({ id: imageAssets.id })
+      .from(imageAssets)
+      .where(samePhoto)
+      .limit(1);
+    if (stored === undefined) throw new Error("Uploaded image asset was not persisted");
     return stored.id;
   }
   await createImageThumbnail({
