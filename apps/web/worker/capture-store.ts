@@ -560,6 +560,7 @@ export async function reserveCaptureRetry({
       .update(bottleCaptures)
       .set({
         status: "queued",
+        reviewRevision: sql`${bottleCaptures.reviewRevision} + 1`,
         workflowInstanceId,
         errorMessage: null,
         errorDetailJson: null,

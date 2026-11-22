@@ -102,6 +102,36 @@ await describe("capture review corrections", async () => {
     }
   });
 
+  await it("rejects the displayed revision after a retry replaces the extraction", async () => {
+    const { sqlite, database, request } = setup();
+    try {
+      assert.equal(
+        await reserveCaptureRetry({
+          database,
+          captureId: "capture",
+          siteId: "site",
+          userId: userIdForClerkUser("dev:tester"),
+          expectedWorkflowInstanceId: null,
+          expectedReviewRevision: 0,
+          workflowInstanceId: "replacement",
+        }),
+        true,
+      );
+      sqlite.exec("UPDATE bottle_captures SET status='needs_review'");
+      sqlite
+        .prepare("UPDATE bottle_capture_runs SET import_candidate_json=?")
+        .run(JSON.stringify({ ...candidate, wine: { ...candidate.wine, vintageYear: 2016 } }));
+      assert.equal((await request("POST", "/import", { expectedReviewRevision: 0 })).status, 409);
+      assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottles").get()?.["n"], 0);
+      assert.equal(
+        (await request("PATCH", "/review", { expectedRevision: 0, candidate })).status,
+        409,
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("does not clear unresolved alcohol evidence through a notes-only correction", async () => {
     const { sqlite, request } = setup();
     try {
@@ -273,7 +303,7 @@ await describe("capture review corrections", async () => {
     const body = z
       .object({ data: z.object({ reviewRevision: z.number(), reviewCandidate: z.unknown() }) })
       .parse(await detail.json());
-    assert.equal(body.data.reviewRevision, 1);
+    assert.equal(body.data.reviewRevision, 2);
     assert.deepEqual(body.data.reviewCandidate, {
       ...candidate,
       wine: { ...candidate.wine, designation: "" },
