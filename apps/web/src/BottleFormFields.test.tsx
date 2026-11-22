@@ -1,5 +1,5 @@
 import { Button } from "@astryxdesign/core/Button";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { useForm } from "react-hook-form";
@@ -57,11 +57,14 @@ describe("ASTRYX react-hook-form fields", () => {
 
   it("shows required status and focuses the first invalid field", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    const { container } = render(<Harness />);
 
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("Winery is required.")).toBeVisible();
+    expect(await within(container).findByText("Winery is required.")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: /winery/iu })).toHaveAccessibleDescription(
+      "Winery is required.",
+    );
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: /winery/iu })).toHaveFocus();
     });
