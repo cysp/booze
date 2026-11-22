@@ -100,7 +100,7 @@ export function DestructiveActionDialog({
     try {
       if (await onAction()) {
         finishPending();
-        closeAndRestoreFocus(onSuccess);
+        closeAndRestoreFocus("confirmed");
         return;
       }
       setError(failureMessage);
@@ -115,7 +115,7 @@ export function DestructiveActionDialog({
       if (nextIsOpen) {
         onOpenChange(true);
       } else {
-        closeAndRestoreFocus();
+        closeAndRestoreFocus("cancelled");
       }
     }
   }
@@ -125,17 +125,18 @@ export function DestructiveActionDialog({
     setIsPending(false);
   }
 
-  function closeAndRestoreFocus(afterFocus?: () => void): void {
+  function closeAndRestoreFocus(outcome: "confirmed" | "cancelled"): void {
     onOpenChange(false);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const returnTarget = returnFocusRef?.current ?? fallbackReturnFocusRef.current;
-        if (returnTarget?.isConnected === true) {
-          returnTarget.focus();
-        } else {
-          fallbackFocus?.()?.focus();
-        }
-        afterFocus?.();
+        const trigger = returnFocusRef?.current ?? fallbackReturnFocusRef.current;
+        const connectedTrigger = trigger?.isConnected === true ? trigger : null;
+        const fallback = fallbackFocus?.();
+        // A committed deletion can leave its trigger mounted until the next catalogue render.
+        const target =
+          outcome === "confirmed" ? (fallback ?? connectedTrigger) : (connectedTrigger ?? fallback);
+        target?.focus();
+        if (outcome === "confirmed") onSuccess?.();
       });
     });
   }
