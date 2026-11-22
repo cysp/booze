@@ -27,7 +27,7 @@ it("retains an uncertain bottle operation across retries and remount, blocks edi
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
       expect(_url).toBe("/api/additions/bottles");
-      if (typeof init.body !== "string") throw new Error("Expected JSON request body");
+      if (typeof init.body !== "string") throw new TypeError("Expected JSON request body");
       const payload: unknown = JSON.parse(init.body);
       if (typeof payload !== "object" || payload === null)
         throw new Error("Expected addition payload");
@@ -79,7 +79,7 @@ it("retains uncertain photos and operation identity, and treats a confirmed capt
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
       expect(_url).toBe("/api/additions/bottle-captures");
-      if (!(init.body instanceof FormData)) throw new Error("Expected capture form data");
+      if (!(init.body instanceof FormData)) throw new TypeError("Expected capture form data");
       bodies.push(init.body);
       if (!succeed) throw new Error("response lost");
       return Response.json(
@@ -107,7 +107,7 @@ it("retains uncertain photos and operation identity, and treats a confirmed capt
   expect(bodies[0]?.get("operationId")).toEqual(expect.any(String));
   expect(bodies[1]?.get("operationId")).toBe(bodies[0]?.get("operationId"));
   const retainedImage = bodies[1]?.get("images");
-  if (!(retainedImage instanceof File)) throw new Error("Expected retained photo");
+  if (!(retainedImage instanceof File)) throw new TypeError("Expected retained photo");
   expect(retainedImage.name).toBe("label.jpg");
   succeed = true;
   shared.completeMutation.mockRejectedValue(new Error("refresh failed"));
@@ -122,7 +122,7 @@ it("clears bottle identity on deliberate cancellation and scopes pending operati
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
-      if (typeof init.body !== "string") throw new Error("Expected JSON");
+      if (typeof init.body !== "string") throw new TypeError("Expected JSON");
       const body: unknown = JSON.parse(init.body);
       if (typeof body !== "object" || body === null) throw new Error("Expected payload");
       requests.push({ ...body });
@@ -182,7 +182,7 @@ it("keeps photos and identity for incomplete or unreadable saved capture respons
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
-      if (!(init.body instanceof FormData)) throw new Error("Expected photo request");
+      if (!(init.body instanceof FormData)) throw new TypeError("Expected photo request");
       bodies.push(init.body);
       if (bodies.length === 1)
         return Response.json(
