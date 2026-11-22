@@ -183,35 +183,41 @@ await describe("capture persistence", async () => {
     assert.equal(objects.has(newKey), true);
   });
 
-  await it("deduplicates simultaneous photo uploads and cleans only the losing object", async () => {
-    const sqlite = seededDatabase();
-    const database = createD1Client(asD1(sqlite));
-    const { bucket, objects } = imageBucket();
-    const input = {
-      bucket,
-      database,
-      files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
-      images: undefined,
-      positionHint: null,
-      quantity: 1,
-      siteId: "site",
-      storageLocationId: null,
-      userId: "user",
-    };
-    const results = await Promise.all([createBottleCapture(input), createBottleCapture(input)]);
-    assert.deepEqual(
-      results.map((result) => result.status),
-      ["queued", "queued"],
-    );
-    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM image_assets").get()?.["count"], 1);
-    assert.equal(
-      sqlite.prepare("SELECT count(*) AS count FROM bottle_capture_images").get()?.["count"],
-      2,
-    );
-    await drainR2ObjectDeletionQueue({ bucket, database: asD1(sqlite) });
-    const storedKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
-    assert.deepEqual([...objects.keys()], [storedKey]);
-  });
+  for (const uniqueDigestIndex of [true, false]) {
+    await it(`deduplicates simultaneous photo uploads and cleans only the losing object (digest index ${uniqueDigestIndex})`, async () => {
+      const sqlite = seededDatabase();
+      if (!uniqueDigestIndex) sqlite.exec("DROP INDEX image_assets_site_id_sha256_unique");
+      const database = createD1Client(asD1(sqlite));
+      const { bucket, objects } = imageBucket();
+      const input = {
+        bucket,
+        database,
+        files: [new File(["photo"], "label.jpg", { type: "image/jpeg" })],
+        images: undefined,
+        positionHint: null,
+        quantity: 1,
+        siteId: "site",
+        storageLocationId: null,
+        userId: "user",
+      };
+      const results = await Promise.all([createBottleCapture(input), createBottleCapture(input)]);
+      assert.deepEqual(
+        results.map((result) => result.status),
+        ["queued", "queued"],
+      );
+      assert.equal(
+        sqlite.prepare("SELECT count(*) AS count FROM image_assets").get()?.["count"],
+        1,
+      );
+      assert.equal(
+        sqlite.prepare("SELECT count(*) AS count FROM bottle_capture_images").get()?.["count"],
+        2,
+      );
+      await drainR2ObjectDeletionQueue({ bucket, database: asD1(sqlite) });
+      const storedKey = String(sqlite.prepare("SELECT r2_key FROM image_assets").get()?.["r2_key"]);
+      assert.deepEqual([...objects.keys()], [storedKey]);
+    });
+  }
 
   await it("protects live photos referenced by legacy deletion queue entries", async () => {
     const sqlite = seededDatabase();
