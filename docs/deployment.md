@@ -28,6 +28,10 @@ The health route confirms that the Worker responds; it does not verify Clerk sig
 
 The wine identity migration has additional release and rollback constraints. Complete the [wine identity release checklist](wine-identity-release.md) before merging it. CI success alone does not satisfy those checks.
 
+### Addition receipts and capture uploads
+
+Deploy the shared-image writer from #222 before applying the capture upload migrations in #210. Until the first write with #210, that writer can serve the migrated schema. From the first write, keep #210 as the earliest Worker rollback target. Earlier Workers cannot replay addition receipts or drain multipart cleanup records. If #210 itself needs repair after that point, deploy a forward fix that preserves the receipts, upload manifests and cleanup queue.
+
 ## D1 migration lineage
 
 Migrations `0000` through `0008` establish the original lineage. A comment-only v1 baseline follows them; subsequent generated migrations use timestamped folders. Keep every existing SQL file unchanged and in order. Schema changes append a new migration; do not replace history with a generated initial migration, rename old files, or hide mismatches with `IF NOT EXISTS`.

@@ -1,3 +1,6 @@
+import { createD1Client } from "@chikachow/booze-db";
+import { requireSitePermission } from "./api/auth.ts";
+import { operationConstraintFailed, operationPermissionGuard } from "./operation-transaction.ts";
 import { errorDetails, logError, logInfo } from "./observability.ts";
 
 const deletionBatchSize = 1_000;
@@ -11,24 +14,36 @@ function shortQueueError(error: unknown): string {
 export async function deleteBottleCaptureData({
   captureId,
   database,
+  siteId,
+  userId,
 }: {
   readonly captureId: string;
   readonly database: D1Database;
+  readonly siteId: string;
+  readonly userId: string;
 }): Promise<boolean> {
   const deletableCapture = `SELECT id FROM bottle_captures
-    WHERE id = ? AND (status NOT IN ('queued', 'extracting', 'importing') OR (status = 'queued' AND error_message IS NOT NULL))`;
-  const results = await database.batch([
-    database
-      .prepare(`INSERT INTO r2_object_deletion_queue
+    WHERE id = ? AND site_id = ? AND (status NOT IN ('queued', 'extracting', 'importing') OR (status = 'queued' AND error_message IS NOT NULL))`;
+  const client = createD1Client(database);
+  const guard = operationPermissionGuard(
+    { database: client, userId, source: "http" },
+    siteId,
+  ).toSQL();
+  let results: D1Result[];
+  try {
+    results = await database.batch([
+      database.prepare(guard.sql).bind(...guard.params),
+      database
+        .prepare(`INSERT INTO r2_object_deletion_queue
       (r2_key, source_kind, source_id, multipart_upload_id)
       SELECT r2_key, 'capture_upload', write_id, upload_id FROM capture_image_uploads
       WHERE capture_id = (${deletableCapture})
       ON CONFLICT (r2_key) DO UPDATE SET multipart_upload_id =
         coalesce(excluded.multipart_upload_id, r2_object_deletion_queue.multipart_upload_id)`)
-      .bind(captureId),
-    database
-      .prepare(
-        `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
+        .bind(captureId, siteId),
+      database
+        .prepare(
+          `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
          SELECT image_assets.r2_key, 'image_asset', image_assets.id
          FROM image_assets
          INNER JOIN bottle_capture_images
@@ -41,11 +56,11 @@ export async function deleteBottleCaptureData({
                AND other_capture_image.capture_id <> ?
            )
          ON CONFLICT (r2_key) DO NOTHING`,
-      )
-      .bind(captureId, captureId),
-    database
-      .prepare(
-        `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
+        )
+        .bind(captureId, siteId, captureId),
+      database
+        .prepare(
+          `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
          SELECT image_assets.thumbnail_r2_key, 'image_asset', image_assets.id
          FROM image_assets
          INNER JOIN bottle_capture_images
@@ -59,49 +74,49 @@ export async function deleteBottleCaptureData({
                AND other_capture_image.capture_id <> ?
            )
          ON CONFLICT (r2_key) DO NOTHING`,
-      )
-      .bind(captureId, captureId),
-    database
-      .prepare(
-        `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
+        )
+        .bind(captureId, siteId, captureId),
+      database
+        .prepare(
+          `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
          SELECT extraction_r2_key, 'capture_run', id
          FROM bottle_capture_runs
          WHERE capture_id = (${deletableCapture}) AND extraction_r2_key IS NOT NULL
          ON CONFLICT (r2_key) DO NOTHING`,
-      )
-      .bind(captureId),
-    database
-      .prepare(
-        `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
+        )
+        .bind(captureId, siteId),
+      database
+        .prepare(
+          `INSERT INTO r2_object_deletion_queue (r2_key, source_kind, source_id)
          SELECT error_detail_r2_key, 'capture_run', id
          FROM bottle_capture_runs
          WHERE capture_id = (${deletableCapture}) AND error_detail_r2_key IS NOT NULL
          ON CONFLICT (r2_key) DO NOTHING`,
-      )
-      .bind(captureId),
-    database
-      .prepare(
-        `DELETE FROM label_extractions
+        )
+        .bind(captureId, siteId),
+      database
+        .prepare(
+          `DELETE FROM label_extractions
          WHERE capture_id = (${deletableCapture})
             OR capture_run_id IN (
               SELECT id FROM bottle_capture_runs WHERE capture_id = (${deletableCapture})
             )`,
-      )
-      .bind(captureId, captureId),
-    database
-      .prepare(`DELETE FROM bottle_capture_images WHERE capture_id = (${deletableCapture})`)
-      .bind(captureId),
-    database
-      .prepare(`DELETE FROM bottle_capture_runs WHERE capture_id = (${deletableCapture})`)
-      .bind(captureId),
-    database
-      .prepare(`DELETE FROM capture_image_uploads WHERE capture_id = (${deletableCapture})`)
-      .bind(captureId),
-    database
-      .prepare(`DELETE FROM bottle_captures WHERE id = (${deletableCapture})`)
-      .bind(captureId),
-    database.prepare(
-      `DELETE FROM image_assets
+        )
+        .bind(captureId, siteId, captureId, siteId),
+      database
+        .prepare(`DELETE FROM bottle_capture_images WHERE capture_id = (${deletableCapture})`)
+        .bind(captureId, siteId),
+      database
+        .prepare(`DELETE FROM bottle_capture_runs WHERE capture_id = (${deletableCapture})`)
+        .bind(captureId, siteId),
+      database
+        .prepare(`DELETE FROM capture_image_uploads WHERE capture_id = (${deletableCapture})`)
+        .bind(captureId, siteId),
+      database
+        .prepare(`DELETE FROM bottle_captures WHERE id = (${deletableCapture})`)
+        .bind(captureId, siteId),
+      database.prepare(
+        `DELETE FROM image_assets
        WHERE r2_key IN (
          SELECT r2_key FROM r2_object_deletion_queue
        )
@@ -110,8 +125,19 @@ export async function deleteBottleCaptureData({
          FROM bottle_capture_images
          WHERE bottle_capture_images.image_asset_id = image_assets.id
        )`,
-    ),
-  ]);
+      ),
+    ]);
+  } catch (error) {
+    if (operationConstraintFailed(error, "NOT NULL constraint failed: site_memberships.role")) {
+      await requireSitePermission({
+        database: client,
+        siteId,
+        userId,
+        permission: "site.content.write",
+      });
+    }
+    throw error;
+  }
   return results.at(-2)?.meta.changes === 1;
 }
 

@@ -135,7 +135,7 @@ export function useBottleController({
         quantity: quantity.value,
       };
       const operationId = await addition.operationId(form.siteId, payload);
-      const response = await fetch("/api/bottles", {
+      const response = await fetch("/api/additions/bottles", {
         method: "POST",
         headers: jsonHeaders(await getAuthHeaders()),
         body: JSON.stringify({
@@ -337,7 +337,7 @@ export function useCaptureController({
       for (const file of files) {
         formData.append("images", file);
       }
-      const response = await fetch("/api/bottle-captures", {
+      const response = await fetch("/api/additions/bottle-captures", {
         method: "POST",
         headers: await getAuthHeaders(),
         body: formData,
@@ -378,14 +378,7 @@ export function useCaptureController({
         message: "Capture submitted. Extraction will run in the background.",
       };
       addition.clear(form.siteId);
-      setCaptureForm({
-        siteId: form.siteId,
-        site: form.site,
-        storageLocationId: form.storageLocationId,
-        location: form.location,
-        position: form.position,
-        quantity: "1",
-      });
+      setCaptureForm((current) => (current === form ? { ...current, quantity: "1" } : current));
       const message = captureSubmitErrorMessage(responsePayload);
       if (message !== null) {
         const statusMessage = `Capture saved: ${message}`;

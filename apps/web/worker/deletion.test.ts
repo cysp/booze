@@ -80,6 +80,8 @@ await describe("durable deletion", async () => {
     await deleteBottleCaptureData({
       captureId: "capture-1",
       database: asD1(database),
+      siteId: "site-1",
+      userId: "user-1",
     });
 
     assert.equal(scalar(database, "SELECT count(*) FROM image_assets"), 1);
@@ -92,6 +94,8 @@ await describe("durable deletion", async () => {
     await deleteBottleCaptureData({
       captureId: "capture-2",
       database: asD1(database),
+      siteId: "site-1",
+      userId: "user-1",
     });
 
     assert.equal(scalar(database, "SELECT count(*) FROM image_assets"), 0);

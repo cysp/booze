@@ -425,6 +425,8 @@ await describe("capture lifecycle recovery", async () => {
     d1.batch = async (statements) => {
       assert.equal(
         await saveCaptureReview({
+          siteId: "site",
+          userId: userIdForClerkUser("dev:tester"),
           captureId: "capture",
           database: createD1Client(asD1(sqlite)),
           expectedRevision: 0,

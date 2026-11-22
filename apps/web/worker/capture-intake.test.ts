@@ -88,7 +88,12 @@ await describe("recoverable capture image intake", async () => {
     assert.equal(typeof capture, "string");
     try {
       assert.equal(
-        await deleteBottleCaptureData({ captureId: String(capture), database: fixture.d1 }),
+        await deleteBottleCaptureData({
+          captureId: String(capture),
+          database: fixture.d1,
+          siteId: "site",
+          userId: "user",
+        }),
         true,
       );
       await drainR2ObjectDeletionQueue({ bucket: fixture.bucket, database: fixture.d1 });

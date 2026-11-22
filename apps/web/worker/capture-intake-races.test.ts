@@ -282,6 +282,8 @@ await describe("capture intake ownership races", async () => {
           await deleteBottleCaptureData({
             captureId: captureId(fixture.sqlite),
             database: fixture.d1,
+            siteId: "site",
+            userId: "user",
           }),
           true,
         );
@@ -329,6 +331,8 @@ await describe("capture intake ownership races", async () => {
           await deleteBottleCaptureData({
             captureId: captureId(fixture.sqlite),
             database: fixture.d1,
+            siteId: "site",
+            userId: "user",
           }),
           true,
         );

@@ -567,7 +567,7 @@ test("clears submitted capture files without duplicating a committed capture", a
   const scenario: StaleRefreshScenario = {
     mutationCount: 0,
     mutationMethod: "POST",
-    mutationPath: "/api/bottle-captures",
+    mutationPath: "/api/additions/bottle-captures",
     refreshFailurePath: "/api/bottles",
   };
   await mockCommittedMutationWithStaleRefresh(page, scenario);

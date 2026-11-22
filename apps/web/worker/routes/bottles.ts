@@ -157,7 +157,7 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
     const rows = await listBottles({ database, userId: authenticatedUser.userId });
     return context.json({ data: rows });
   })
-  .post("/bottles", async (context) => {
+  .on("POST", ["/bottles", "/additions/bottles"], async (context) => {
     const payload = createBottleSchema.parse(await context.req.json());
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
