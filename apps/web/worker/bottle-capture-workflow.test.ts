@@ -32,6 +32,21 @@ const { BottleCaptureWorkflow } = await import("./bottle-capture-workflow.ts");
 hooks.deregister();
 
 await describe("capture Workflow draft creation", async () => {
+  await it("records a same-owner retryable failure if the first step exhausts its retries", async () => {
+    const { sqlite, workflow } = setup("queued");
+    const step = fixtureSteps();
+    step.do = async () => {
+      throw new Error("First step exhausted");
+    };
+    const outcome = await workflow.run(event("workflow"), step);
+    assert.deepEqual(outcome, {
+      captureId: "capture",
+      failedStage: "start capture workflow",
+      status: "failed",
+    });
+    assert.equal(sqlite.prepare("SELECT status FROM bottle_captures").get()?.["status"], "failed");
+  });
+
   await it("keeps a high-confidence extraction as a reviewable draft without adding stock", async () => {
     const { sqlite, workflow } = setup("extracting");
     const output = await workflow.run(event("workflow"), fixtureSteps());
@@ -163,6 +178,7 @@ await describe("capture Workflow draft creation", async () => {
   await it("retains legacy checkpoint evidence without inventing raw response or configuration", async () => {
     const { workflow, artifacts } = setup("extracting");
     const cache = legacySteps();
+    cache.set("write extraction artifact", { r2Key: "old-artifact-for-a-different-candidate" });
     cache.set("extract label evidence with google-gemini-3-flash-preview", {
       extractorId: "legacy",
       model: "old-model",

@@ -130,7 +130,8 @@ export class BottleCaptureWorkflow extends WorkflowEntrypoint<
         database,
         status: "failed",
         workflowInstanceId,
-        expectedStatus: "extracting",
+        expectedStatus:
+          failedStage === "start capture workflow" ? ["queued", "extracting"] : "extracting",
         ...(runContext === null ? {} : { runId: runContext.runId }),
         errorMessage: message,
         errorDetail: runContext === null ? errorDetails(error) : null,
@@ -223,7 +224,7 @@ async function writeExtractionArtifact(args: {
   readonly workflowInstanceId: string;
 }): Promise<CaptureRunArtifact | null> {
   const { captureId, context, env, draft, extraction, step, workflowInstanceId } = args;
-  return step.do("write extraction artifact", async () => {
+  return step.do("write reviewed capture extraction artifact", async () => {
     if (!(await activeRun(args))) return null;
     const artifact = await putCaptureRunArtifact({
       bucket: env.IMAGE_BUCKET,

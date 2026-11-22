@@ -427,7 +427,7 @@ export async function updateCaptureStatus({
   readonly importedBottleIds?: readonly string[];
   readonly status: CaptureStatus;
   readonly workflowInstanceId?: string | null | undefined;
-  readonly expectedStatus?: CaptureStatus;
+  readonly expectedStatus?: CaptureStatus | readonly CaptureStatus[];
   readonly runId?: string;
 }): Promise<boolean> {
   const updated = await database
@@ -450,7 +450,11 @@ export async function updateCaptureStatus({
         workflowInstanceId === undefined
           ? undefined
           : sql`${bottleCaptures.workflowInstanceId} IS ${workflowInstanceId}`,
-        expectedStatus === undefined ? undefined : eq(bottleCaptures.status, expectedStatus),
+        expectedStatus === undefined
+          ? undefined
+          : typeof expectedStatus === "string"
+            ? eq(bottleCaptures.status, expectedStatus)
+            : inArray(bottleCaptures.status, [...expectedStatus]),
         runId === undefined ? undefined : eq(latestCaptureRunId(captureId), runId),
       ),
     )
