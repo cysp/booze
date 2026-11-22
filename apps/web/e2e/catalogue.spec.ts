@@ -902,7 +902,7 @@ test("astryx regression: selector stays closed after trigger light dismiss", asy
   await selector.evaluate(async (trigger) => {
     trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     const popup = document.querySelector("[popover]:popover-open");
-    if (!(popup instanceof HTMLElement)) throw new Error("Missing open selector popup");
+    if (!(popup instanceof HTMLElement)) throw new TypeError("Missing open selector popup");
     popup.hidePopover();
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
