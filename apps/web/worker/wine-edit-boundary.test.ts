@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { Hono } from "hono";
+import { z } from "zod";
 import { createD1Client } from "@chikachow/booze-db";
 import { prepareWineVintage } from "./api/catalogue.ts";
 import { problemResponseForError } from "./api/http.ts";
@@ -69,6 +70,12 @@ function setup() {
     sqlite,
     item,
     d1,
+    read: async () =>
+      app.request(
+        "http://localhost/bottles/one",
+        { headers: { "x-dev-user": "tester" } },
+        { DB: d1 },
+      ),
     request: async (payload: unknown) => {
       return app.request(
         "http://localhost/bottles/one",
@@ -82,6 +89,19 @@ function setup() {
     },
   };
 }
+
+await it("returns stored grape measurements in the bottle detail", async () => {
+  const { read } = setup();
+  const response = await read();
+  assert.equal(response.status, 200);
+  const body = z
+    .object({ data: z.object({ grapeConstituents: z.unknown(), grapeVarieties: z.unknown() }) })
+    .parse(await response.json());
+  assert.deepEqual(body.data.grapeVarieties, ["Shiraz"]);
+  assert.deepEqual(body.data.grapeConstituents, [
+    { name: "Shiraz", percentage: 100, blendText: "Estate grown" },
+  ]);
+});
 
 await it("preserves unchanged grape measurements through frontend separate-wine payload", async () => {
   const { sqlite, item, request } = setup();

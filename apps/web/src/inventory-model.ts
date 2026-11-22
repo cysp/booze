@@ -91,6 +91,8 @@ export type BottlePatch = {
   readonly wineVintageId?: string | undefined;
   readonly expectedWineVintageId?: string | undefined;
   readonly expectedAffectedBottleCount?: number | undefined;
+  readonly expectedCriticReviews?: BottleResource["criticReviews"] | undefined;
+  readonly expectedAwards?: BottleResource["awards"] | undefined;
   readonly allowUnidentified?: boolean | undefined;
   readonly status?: "in_stock" | "consumed";
   readonly storageLocationId?: string | null | undefined;

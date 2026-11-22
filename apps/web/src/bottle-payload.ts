@@ -34,7 +34,11 @@ export type BottleEditSubmit =
       readonly positionHint: string;
     }
   | { readonly kind: "edit-bottle"; readonly bottle: BottleInput }
-  | (WineEvidence & { readonly kind: "correct-wine"; readonly wine?: WinePatchInput | undefined })
+  | (WineEvidence &
+      Pick<BottlePatch, "expectedCriticReviews" | "expectedAwards"> & {
+        readonly kind: "correct-wine";
+        readonly wine?: WinePatchInput | undefined;
+      })
   | { readonly kind: "reassign"; readonly wineVintageId: string }
   | (WineEvidence & { readonly kind: "reassign"; readonly wine: WineInput });
 export type BottleModalSubmit = BottleAddSubmit | BottleEditSubmit;
@@ -92,6 +96,8 @@ export function bottleEditPayload(submission: BottleEditSubmit, item: InventoryI
         wineEditScope: "shared",
         expectedWineVintageId: item.wineVintageId,
         expectedAffectedBottleCount: item.wineBottleCount,
+        expectedCriticReviews: submission.expectedCriticReviews,
+        expectedAwards: submission.expectedAwards,
         wine: submission.wine,
         allowUnidentified: submission.allowUnidentified,
         criticReviews: submission.criticReviews,
@@ -140,6 +146,10 @@ export function bottleFormSubmission(
       return {
         kind: "correct-wine",
         wine: changedWineFacts(draft, formStateForItem(action.item)),
+        ...(evidence.criticReviews === undefined
+          ? {}
+          : { expectedCriticReviews: action.item.criticReviews }),
+        ...(evidence.awards === undefined ? {} : { expectedAwards: action.item.awards }),
         ...evidence,
       };
     case "reassign":

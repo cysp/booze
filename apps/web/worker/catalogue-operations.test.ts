@@ -1,3 +1,4 @@
+import { getBottle } from "./api/inventory.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createD1Client } from "@chikachow/booze-db";
@@ -326,6 +327,70 @@ await describe("complete bottle operations", async () => {
     assert.equal(change.after?.wine?.["sourceUrl"], "https://example.org/wine");
     assert.equal(change.after?.criticReviews?.length, 1);
     assert.equal(change.after?.awards?.length, 1);
+  });
+
+  await it("preserves concurrent reviews and awards when a stale editor saves a replacement", async () => {
+    const { context, sqlite } = setup();
+    const before = await getBottle({ ...context, bottleId: "bottle" });
+    const guard = {
+      wineEditScope: "shared" as const,
+      expectedWineVintageId: "wine",
+      expectedAffectedBottleCount: 1,
+    };
+    await editBottle(context, "bottle", {
+      ...guard,
+      expectedCriticReviews: before.criticReviews,
+      criticReviews: [{ reviewSourceName: "Critic B", ratingText: "90" }],
+      expectedAwards: before.awards,
+      awards: [{ awardName: "Show", awardLevel: "Gold" }],
+    });
+    await assert.rejects(
+      editBottle(context, "bottle", {
+        ...guard,
+        expectedCriticReviews: before.criticReviews,
+        criticReviews: [],
+      }),
+      { status: 409 },
+    );
+    await assert.rejects(
+      editBottle(context, "bottle", { ...guard, expectedAwards: before.awards, awards: [] }),
+      { status: 409 },
+    );
+    const current = await getBottle({ ...context, bottleId: "bottle" });
+    assert.deepEqual(
+      current.criticReviews.map((r) => r.ratingText),
+      ["90"],
+    );
+    assert.deepEqual(
+      current.awards.map((r) => r.awardLevel),
+      ["Gold"],
+    );
+    await editBottle(context, "bottle", {
+      ...guard,
+      expectedCriticReviews: current.criticReviews,
+      criticReviews: [],
+    });
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM critic_reviews").get()?.["n"], 0);
+  });
+
+  await it("saves a notes-only correction while preserving a historical reversed drinking window", async () => {
+    const { context, sqlite } = setup();
+    sqlite.exec(
+      "UPDATE wine_vintages SET drink_from_year=1801, drink_to_year=1800 WHERE id='wine'",
+    );
+    await editBottle(context, "bottle", {
+      wineEditScope: "shared",
+      expectedWineVintageId: "wine",
+      expectedAffectedBottleCount: 1,
+      wine: { notes: "Check vintage" },
+    });
+    const row = sqlite
+      .prepare("SELECT drink_from_year,drink_to_year,notes FROM wine_vintages WHERE id='wine'")
+      .get();
+    assert.deepEqual(
+      { ...row },
+      { drink_from_year: 1801, drink_to_year: 1800, notes: "Check vintage" },
+    );
   });
 
   await it("restores history with its surviving location and leaves deleted locations unset", async () => {

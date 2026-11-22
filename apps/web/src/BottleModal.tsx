@@ -202,8 +202,8 @@ export function BottleModal({
     const result = await onSubmit(
       bottleFormSubmission(draftAction, current, evidence, wineSelection.id),
     );
-    if (result.ok) onClose(current.siteId);
-    else setSubmitError(result.message);
+    if (!result.ok) setSubmitError(result.message);
+    else if (draftAction.kind !== "add") onClose(current.siteId);
   }, revealErrors);
 
   async function save(event: SubmitEvent<HTMLFormElement>): Promise<void> {

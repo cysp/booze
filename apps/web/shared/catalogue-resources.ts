@@ -74,9 +74,16 @@ export const wineFactsResourceSchema = z.object({
   sourceUrl: nullableText,
 });
 
+export const grapeConstituentSchema = z.object({
+  name: text,
+  percentage: nullableNumber,
+  blendText: nullableText,
+});
+
 export const bottleResourceSchema = z
   .object({
     ...wineFactsResourceSchema.shape,
+    grapeConstituents: z.array(grapeConstituentSchema).readonly().optional(),
     id: text,
     wineVintageId: text,
     wineryId: nullableText,
