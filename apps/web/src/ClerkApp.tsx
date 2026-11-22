@@ -1,6 +1,8 @@
 import { ClerkProvider, RedirectToSignIn, Show, UserButton, useAuth } from "@clerk/react";
 import { lazy, useCallback, type ReactElement } from "react";
 
+import { CatalogueLoadBoundary } from "./LazyLoadErrorBoundary.tsx";
+
 const Catalogue = lazy(async () => {
   const module = await import("./App.tsx");
   return { default: module.Catalogue };
@@ -31,11 +33,13 @@ function ClerkCatalogue(): ReactElement {
 
   if (userId === null || userId === undefined) return <></>;
   return (
-    <Catalogue
-      additionScope={userId}
-      authControl={<UserButton />}
-      authMode="clerk"
-      getAuthHeaders={getAuthHeaders}
-    />
+    <CatalogueLoadBoundary>
+      <Catalogue
+        additionScope={userId}
+        authControl={<UserButton />}
+        authMode="clerk"
+        getAuthHeaders={getAuthHeaders}
+      />
+    </CatalogueLoadBoundary>
   );
 }

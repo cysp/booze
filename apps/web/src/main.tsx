@@ -6,7 +6,7 @@ import "@fontsource-variable/figtree";
 
 // oxlint-disable-next-line import/no-unassigned-import -- Vite loads the application stylesheet for its side effect.
 import "./App.css";
-import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
+import { CatalogueLoadBoundary, LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
 // oxlint-disable-next-line import/no-unassigned-import -- The compiled theme CSS must load once.
 import "./generated/booze.css";
 import { boozeTheme } from "./generated/booze.js";
@@ -42,14 +42,9 @@ createRoot(rootElement).render(
   <StrictMode>
     <Theme mode="system" theme={boozeTheme}>
       {(publishableKey === undefined && isLocalDevHost) || forceDevelopmentAuth ? (
-        <LazyLoadErrorBoundary
-          description="Reload the latest application files and try again."
-          title="Catalogue could not be loaded"
-        >
-          <Suspense fallback={<p role="status">Loading catalogue…</p>}>
-            <App authMode="development" />
-          </Suspense>
-        </LazyLoadErrorBoundary>
+        <CatalogueLoadBoundary>
+          <App authMode="development" />
+        </CatalogueLoadBoundary>
       ) : publishableKey === undefined ? (
         <main className="auth-shell">
           <section className="auth-panel" aria-labelledby="auth-config-title">

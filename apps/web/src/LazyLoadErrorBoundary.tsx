@@ -1,6 +1,6 @@
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
-import { Component, createRef, type ReactNode } from "react";
+import { Component, createRef, Suspense, type ReactElement, type ReactNode } from "react";
 
 type LazyLoadErrorBoundaryProps = {
   readonly children: ReactNode;
@@ -83,4 +83,19 @@ export class LazyLoadErrorBoundary extends Component<
       />
     );
   }
+}
+
+export function CatalogueLoadBoundary({
+  children,
+}: {
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <LazyLoadErrorBoundary
+      description="Reload the latest application files and try again."
+      title="Catalogue could not be loaded"
+    >
+      <Suspense fallback={<p role="status">Loading catalogue…</p>}>{children}</Suspense>
+    </LazyLoadErrorBoundary>
+  );
 }
