@@ -24,6 +24,7 @@ import {
   resolveStorageLocationId,
   resolveWineVintageId,
 } from "./catalogue.ts";
+import { mcpEntityId } from "./ids.ts";
 import { toolJson } from "./pagination.ts";
 import {
   bottleDetailSchema,
@@ -337,25 +338,34 @@ export function createBoozeMcpServer({
       inputSchema: createStorageLocationInputSchema,
       outputSchema: createStorageLocationOutputSchema.shape,
     },
-    async ({ siteId, parentStorageLocationId, name, locationType }) =>
-      toolJson(
-        await createStorageLocation({
-          context: { database, userId, source: "mcp" },
-          input: {
-            siteId,
-            parentId:
-              parentStorageLocationId === undefined || parentStorageLocationId === null
-                ? null
-                : await resolveStorageLocationId({
-                    database,
-                    userId,
-                    locationId: parentStorageLocationId,
-                  }),
-            name,
-            locationType,
-          },
-        }),
-      ),
+    async ({ siteId, parentStorageLocationId, name, locationType }) => {
+      const result = await createStorageLocation({
+        context: { database, userId, source: "mcp" },
+        input: {
+          siteId,
+          parentId:
+            parentStorageLocationId === undefined || parentStorageLocationId === null
+              ? null
+              : await resolveStorageLocationId({
+                  database,
+                  userId,
+                  locationId: parentStorageLocationId,
+                }),
+          name,
+          locationType,
+        },
+      });
+      const encode = (location: typeof result.after) => ({
+        ...location,
+        id: mcpEntityId("location", location.id),
+        parentId: location.parentId === null ? null : mcpEntityId("location", location.parentId),
+      });
+      return toolJson({
+        ...result,
+        before: result.before === null ? null : encode(result.before),
+        after: encode(result.after),
+      });
+    },
   );
 
   server.registerTool(

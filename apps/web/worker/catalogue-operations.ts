@@ -568,10 +568,11 @@ function jsonRow(
     ([key]) =>
       key !== "createdAt" && key !== "updatedAt" && (keys === undefined || keys.includes(key)),
   );
-  return sql`json_object(${sql.join(
-    fields.flatMap(([key, column]) => [sql`${key}`, sql`${column}`]),
-    sql`, `,
-  )})`;
+  if (fields.length === 0) return sql`json_object()`;
+  // D1 permits 32 arguments per function call. Aggregate key/value rows so a
+  // wide wine keeps all fields, including SQL NULL, in its audit snapshot.
+  const rows = fields.map(([key, column]) => sql`(${key}, ${column})`);
+  return sql`(with audit_fields(name, value) as (values ${sql.join(rows, sql`, `)}) select json_group_object(name, value) from audit_fields)`;
 }
 
 function bottleSnapshot(bottleId: string, payload: BottlePatch = {}): SQL {
