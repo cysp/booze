@@ -1,7 +1,6 @@
 @layer reset, astryx-base, astryx-theme, product;
 
 @import "@astryxdesign/core/reset.css";
-@import "@astryxdesign/core/astryx.css";
 
 @layer product {
   :root {

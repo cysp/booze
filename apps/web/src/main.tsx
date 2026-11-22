@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 // oxlint-disable-next-line import/no-unassigned-import -- Loads the self-hosted Figtree variable font.
 import "@fontsource-variable/figtree";
 
-import { App } from "./App.tsx";
+// oxlint-disable-next-line import/no-unassigned-import -- Vite loads the application stylesheet for its side effect.
+import "./App.css";
 import { LazyLoadErrorBoundary } from "./LazyLoadErrorBoundary.tsx";
 // oxlint-disable-next-line import/no-unassigned-import -- The compiled theme CSS must load once.
 import "./generated/booze.css";
@@ -27,6 +28,11 @@ const isLocalDevHost =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const forceDevelopmentAuth = isLocalDevHost && envString("VITE_AUTH_MODE") === "development";
 
+const App = lazy(async () => {
+  const module = await import("./App.tsx");
+  return { default: module.App };
+});
+
 const ClerkApp = lazy(async () => {
   const module = await import("./ClerkApp.tsx");
   return { default: module.ClerkApp };
@@ -36,7 +42,14 @@ createRoot(rootElement).render(
   <StrictMode>
     <Theme mode="system" theme={boozeTheme}>
       {(publishableKey === undefined && isLocalDevHost) || forceDevelopmentAuth ? (
-        <App authMode="development" />
+        <LazyLoadErrorBoundary
+          description="Reload the latest application files and try again."
+          title="Catalogue could not be loaded"
+        >
+          <Suspense fallback={<p role="status">Loading catalogue…</p>}>
+            <App authMode="development" />
+          </Suspense>
+        </LazyLoadErrorBoundary>
       ) : publishableKey === undefined ? (
         <main className="auth-shell">
           <section className="auth-panel" aria-labelledby="auth-config-title">

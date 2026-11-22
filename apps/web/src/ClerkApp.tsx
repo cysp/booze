@@ -1,7 +1,10 @@
 import { ClerkProvider, RedirectToSignIn, Show, UserButton, useAuth } from "@clerk/react";
-import { useCallback, type ReactElement } from "react";
+import { lazy, useCallback, type ReactElement } from "react";
 
-import { Catalogue } from "./App.tsx";
+const Catalogue = lazy(async () => {
+  const module = await import("./App.tsx");
+  return { default: module.Catalogue };
+});
 
 export function ClerkApp({ publishableKey }: { readonly publishableKey: string }): ReactElement {
   return (

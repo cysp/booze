@@ -782,11 +782,12 @@ test("recovers from a rejected cold workspace chunk", async ({ page }) => {
   });
   await expect(recovery).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: /\S/u })).toHaveCount(1);
-  await expect(recovery.getByRole("button", { name: "Retry" })).toBeFocused();
+  const retry = page.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeFocused();
   await expectNoAxeViolations(page);
 
   await page.unroute(captureChunk);
-  await recovery.getByRole("button", { name: "Retry" }).click();
+  await retry.click();
   await expect(page.getByRole("heading", { name: "Photograph bottles" })).toBeVisible();
 });
 
