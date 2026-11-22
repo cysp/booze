@@ -2,10 +2,12 @@
 // oxlint-disable import/max-dependencies -- Worker composition root explicitly registers every route and workflow.
 
 import { Hono } from "hono";
+import { createD1Client } from "@chikachow/booze-db";
 
 import { problemResponse, problemResponseForError } from "./api/http.ts";
 import type { Bindings } from "./api/types.ts";
 import { BottleCaptureWorkflow } from "./bottle-capture-workflow.ts";
+import { startQueuedCaptureWorkflows } from "./capture-start.ts";
 import { tryDrainR2ObjectDeletionQueue } from "./deletion.ts";
 import { bottleCaptureRoutes } from "./routes/bottle-captures.ts";
 import { healthRoutes } from "./routes/health.ts";
@@ -34,13 +36,19 @@ app.onError(problemResponseForError);
 
 const worker = {
   fetch: app.fetch,
-  scheduled(_controller, env, context): void {
+  scheduled(controller, env, context): void {
     context.waitUntil(
-      tryDrainR2ObjectDeletionQueue({
-        bucket: env.IMAGE_BUCKET,
-        database: env.DB,
+      startQueuedCaptureWorkflows({
+        database: createD1Client(env.DB),
+        workflow: env.BOTTLE_CAPTURE_WORKFLOW,
       }),
     );
+    // Capture handoff runs every five minutes; existing object cleanup stays hourly.
+    if (new Date(controller.scheduledTime).getUTCMinutes() === 0) {
+      context.waitUntil(
+        tryDrainR2ObjectDeletionQueue({ bucket: env.IMAGE_BUCKET, database: env.DB }),
+      );
+    }
   },
 } satisfies ExportedHandler<Bindings>;
 

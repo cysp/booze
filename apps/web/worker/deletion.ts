@@ -16,7 +16,7 @@ export async function deleteBottleCaptureData({
   readonly database: D1Database;
 }): Promise<boolean> {
   const deletableCapture = `SELECT id FROM bottle_captures
-    WHERE id = ? AND status NOT IN ('queued', 'extracting', 'importing')`;
+    WHERE id = ? AND (status NOT IN ('queued', 'extracting', 'importing') OR (status = 'queued' AND error_message IS NOT NULL))`;
   const results = await database.batch([
     database
       .prepare(`INSERT INTO r2_object_deletion_queue

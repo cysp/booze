@@ -16,7 +16,7 @@ function setup(
 ) {
   const sqlite = migratedDatabase();
   sqlite.exec(`INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user');
-    INSERT INTO sites (id, name) VALUES ('site', 'Site')`);
+    INSERT INTO sites (id, name) VALUES ('site', 'Site'); INSERT INTO site_memberships(site_id,user_id,role) VALUES ('site','user','owner')`);
   const storage = multipartBucket(hooks(sqlite));
   const d1 = asD1(sqlite);
   const input = {

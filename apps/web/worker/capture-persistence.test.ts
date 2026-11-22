@@ -104,11 +104,27 @@ await describe("capture persistence", async () => {
     );
     const database = createD1Client(asD1(sqlite));
     assert.equal(
-      await reserveCaptureRetry({ captureId: "capture", database, workflowInstanceId: "new" }),
+      await reserveCaptureRetry({
+        captureId: "capture",
+        database,
+        workflowInstanceId: "new",
+        siteId: "site",
+        userId: "user",
+        expectedWorkflowInstanceId: null,
+        expectedReviewRevision: 0,
+      }),
       true,
     );
     assert.equal(
-      await reserveCaptureRetry({ captureId: "capture", database, workflowInstanceId: "other" }),
+      await reserveCaptureRetry({
+        captureId: "capture",
+        database,
+        workflowInstanceId: "other",
+        siteId: "site",
+        userId: "user",
+        expectedWorkflowInstanceId: "new",
+        expectedReviewRevision: 0,
+      }),
       false,
     );
     assert.equal(
@@ -278,7 +294,7 @@ await describe("capture persistence", async () => {
 
   await it("hydrates capture history in three queries and authorizes image reads directly", async () => {
     const sqlite = seededDatabase();
-    sqlite.exec(`INSERT INTO site_memberships (site_id, user_id, role) VALUES ('site', 'user', 'owner');
+    sqlite.exec(`
       INSERT INTO image_assets (id, site_id, sha256, r2_key, content_type, size_bytes, uploaded_by_user_id)
       VALUES ('image', 'site', 'sha', 'photo.jpg', 'image/jpeg', 1, 'user');`);
     for (let index = 0; index < 100; index += 1) {
@@ -420,7 +436,7 @@ await describe("capture persistence", async () => {
 function seededDatabase() {
   const database = migratedDatabase();
   database.exec(
-    "INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user'); INSERT INTO sites (id, name) VALUES ('site', 'Cellar')",
+    "INSERT INTO users (id, clerk_user_id) VALUES ('user', 'user'); INSERT INTO sites (id, name) VALUES ('site', 'Cellar'); INSERT INTO site_memberships(site_id,user_id,role) VALUES ('site','user','owner')",
   );
   return database;
 }

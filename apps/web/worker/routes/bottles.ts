@@ -16,6 +16,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { additionFingerprint, additionOperationIdSchema } from "../../shared/addition-operation.ts";
+import { commitOperation } from "../operation-transaction.ts";
 import { additionReceiptStatement, getAdditionReceipt } from "../addition-receipts.ts";
 import { formatWineDisplayName, hasWineIdentity } from "../../shared/wine-identity.ts";
 
@@ -252,10 +253,11 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
         wineVintageId: vintage.wineVintageId,
       };
       try {
-        await database.batch([
-          additionReceiptStatement(database, operation, result),
-          ...statements,
-        ]);
+        await commitOperation(
+          { database, userId: authenticatedUser.userId, source: "http" },
+          siteId,
+          [additionReceiptStatement(database, operation, result), ...statements],
+        );
       } catch (error) {
         // A concurrent winner or a committed batch with a lost acknowledgement
         // is resolved by its durable receipt; unrelated failures still surface.
