@@ -219,7 +219,9 @@ await describe("capture label values at the inventory persistence seam", async (
           const invalid = { ...input, candidate: { ...input.candidate, bottle: { volumeMl } } };
           if (reviewed) {
             sqlite.exec("UPDATE bottle_captures SET status = 'needs_review'");
-            await assert.rejects(importReviewedCapture({ ...invalid, expectedReviewRevision: 0 }));
+            await assert.rejects(
+              importReviewedCapture({ ...invalid, expectedReviewRevision: 0, userId: "user" }),
+            );
           } else {
             const result = await importBottleCandidate(invalid);
             assert.equal(result.kind, "needs_review");
@@ -241,7 +243,7 @@ await describe("capture label values at the inventory persistence seam", async (
 async function importSetup(options: CombinedOptions = {}) {
   const sqlite = migratedDatabase();
   sqlite.exec(
-    "INSERT INTO users (id,clerk_user_id) VALUES ('user','user'); INSERT INTO sites (id,name) VALUES ('site','Cellar'); INSERT INTO bottle_captures (id,site_id,user_id,status,workflow_instance_id) VALUES ('capture','site','user','extracting','capture')",
+    "INSERT INTO users (id,clerk_user_id) VALUES ('user','user'); INSERT INTO sites (id,name) VALUES ('site','Cellar'); INSERT INTO site_memberships(site_id,user_id,role) VALUES('site','user','owner'); INSERT INTO bottle_captures (id,site_id,user_id,status,workflow_instance_id) VALUES ('capture','site','user','extracting','capture')",
   );
   const database = captureDatabaseFromEnv(asD1(sqlite));
   await createCaptureRun({
