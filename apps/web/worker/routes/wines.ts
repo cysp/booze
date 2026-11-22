@@ -1,4 +1,4 @@
-import { readRequestJson } from "../api/request-body.ts";
+import { readDetailId, readRequestJson } from "../api/request-body.ts";
 import { createD1Client } from "@chikachow/booze-db";
 import { Hono, type Context } from "hono";
 import { requireAuthenticatedUser } from "../api/auth.ts";
@@ -9,18 +9,8 @@ import type { Bindings } from "../api/types.ts";
 export const wineRoutes = new Hono<{ Bindings: Bindings }>()
   .on("GET", "/wines", readWines)
   .on("POST", "/wines/query", readWines)
-  .get("/wines/:wineId", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const { userId } = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    return context.json({
-      data: await getWine({ database, userId, wineId: context.req.param("wineId") }),
-    });
-  });
+  .on("GET", "/wines/:wineId", readWine)
+  .on("POST", "/wines/detail", readWine);
 
 async function readWines(context: Context<{ Bindings: Bindings }>) {
   const database = createD1Client(context.env.DB);
@@ -41,4 +31,21 @@ async function readWines(context: Context<{ Bindings: Bindings }>) {
       ),
     }),
   );
+}
+
+async function readWine(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const { userId } = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  return context.json({
+    data: await getWine({
+      database,
+      userId,
+      wineId: await readDetailId(context.req.raw, context.req.param("wineId")),
+    }),
+  });
 }

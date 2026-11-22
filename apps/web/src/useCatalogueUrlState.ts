@@ -34,7 +34,23 @@ const defaultState: CatalogueUrlState = {
   varietalFilter: "",
 };
 
-export function catalogueStateFromUrl(url: URL): CatalogueUrlState {
+const catalogueFragmentPrefix = "#catalogue?";
+const largeFilterParameters = ["q", "varietal", "siteId", "storageLocationId"] as const;
+
+function expandCatalogueUrl(url: URL): URL {
+  const next = new URL(url);
+  if (!next.hash.startsWith(catalogueFragmentPrefix)) return next;
+  const fragment = new URLSearchParams(next.hash.slice(catalogueFragmentPrefix.length));
+  for (const key of largeFilterParameters) {
+    const value = fragment.get(key);
+    if (value !== null) next.searchParams.set(key, value);
+  }
+  next.hash = fragment.get("anchor") ?? "";
+  return next;
+}
+
+export function catalogueStateFromUrl(input: URL): CatalogueUrlState {
+  const url = expandCatalogueUrl(input);
   const area = url.searchParams.get("area");
   const grouping = url.searchParams.get("grouping");
   return {
@@ -49,7 +65,7 @@ export function catalogueStateFromUrl(url: URL): CatalogueUrlState {
 }
 
 export function catalogueUrlWithState(url: URL, state: CatalogueUrlState): URL {
-  const next = new URL(url);
+  const next = expandCatalogueUrl(url);
   setOptionalParameter(next, "area", state.area, defaultState.area);
   setOptionalParameter(next, "grouping", state.grouping, defaultState.grouping);
   setOptionalParameter(next, "q", state.filter);
@@ -58,6 +74,18 @@ export function catalogueUrlWithState(url: URL, state: CatalogueUrlState): URL {
   setOptionalParameter(next, "siteId", state.siteIdFilter);
   next.searchParams.delete("location");
   setOptionalParameter(next, "drink", state.drinkStatusFilter);
+  if (next.href.length - next.hash.length >= 16 * 1024) {
+    const fragment = new URLSearchParams();
+    if (next.hash) fragment.set("anchor", next.hash);
+    for (const key of largeFilterParameters) {
+      const value = next.searchParams.get(key);
+      if (value !== null) {
+        fragment.set(key, value);
+        next.searchParams.delete(key);
+      }
+    }
+    next.hash = catalogueFragmentPrefix + fragment.toString();
+  }
   return next;
 }
 

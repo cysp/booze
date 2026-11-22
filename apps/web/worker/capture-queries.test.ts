@@ -305,6 +305,17 @@ await describe("bounded capture reads", async () => {
       await (await fixture.request("/bottle-captures?limit=1")).json(),
     );
     assert.equal(first.data[0]?.id, id);
+    const detail = await fixture.request("/bottle-captures/detail", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    assert.equal(detail.status, 200);
+    assert.equal(
+      z.object({ data: z.object({ id: z.string() }) }).parse(await detail.json()).data.id,
+      id,
+    );
+
     assert.ok(first.nextPageToken !== null);
     assert.ok(first.nextPageToken.length > 16_384);
     const second = capturePageSchema.parse(
@@ -338,9 +349,11 @@ await describe("bounded capture reads", async () => {
     formData.set("quantity", "1");
     formData.append("images", new File(["photo"], "label.jpg", { type: "image/jpeg" }));
     const { bucket } = multipartBucket();
+    const launched: string[] = [];
     const workflow = {
-      async create({ id }: { readonly id: string }) {
-        return { id };
+      async createBatch({ instances }: { instances: { id: string }[] }) {
+        launched.push(...instances.map(({ id }) => id));
+        return { created: instances, errors: [] };
       },
     };
     const response = await fixture.request(
@@ -348,15 +361,16 @@ await describe("bounded capture reads", async () => {
       { method: "POST", body: formData },
       {
         ...fixture.bindings,
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The route only calls create() on this Workflow test binding.
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The route only needs batch creation on this Workflow binding.
         BOTTLE_CAPTURE_WORKFLOW: workflow as unknown as Workflow,
         IMAGE_BUCKET: bucket,
       },
     );
     assert.equal(response.status, 201, await response.clone().text());
     const stored = fixture.sqlite
-      .prepare("SELECT site_id,storage_location_id FROM bottle_captures")
+      .prepare("SELECT id,site_id,storage_location_id FROM bottle_captures")
       .get();
+    assert.deepEqual(launched, [stored?.["id"]]);
     assert.equal(stored?.["site_id"], siteId);
     assert.equal(stored?.["storage_location_id"], locationId);
   });

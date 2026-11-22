@@ -4,7 +4,7 @@ import { requireAuthenticatedUser } from "../api/auth.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
 import { getBottle, getCatalogueSummary, queryInventory } from "../api/inventory.ts";
 import { inventoryQuerySchema } from "../api/read-query-inputs.ts";
-import { readRequestJson } from "../api/request-body.ts";
+import { readDetailId, readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
 import {
   addBottles,
@@ -17,18 +17,8 @@ import {
 export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
   .on("GET", "/bottles", readInventory)
   .on("POST", "/bottles/query", readInventory)
-  .get("/bottles/:bottleId", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const { userId } = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    return context.json({
-      data: await getBottle({ database, userId, bottleId: context.req.param("bottleId") }),
-    });
-  })
+  .on("GET", "/bottles/:bottleId", readBottle)
+  .on("POST", "/bottles/detail", readBottle)
   .get("/catalogue-summary", async (context) => {
     const database = createD1Client(context.env.DB);
     const { userId } = await requireAuthenticatedUser({
@@ -91,4 +81,21 @@ async function readInventory(context: Context<{ Bindings: Bindings }>) {
     context.req.method === "POST" ? await readRequestJson(context.req.raw) : context.req.query(),
   );
   return context.json(await queryInventory({ database, userId, input }));
+}
+
+async function readBottle(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const { userId } = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  return context.json({
+    data: await getBottle({
+      database,
+      userId,
+      bottleId: await readDetailId(context.req.raw, context.req.param("bottleId")),
+    }),
+  });
 }

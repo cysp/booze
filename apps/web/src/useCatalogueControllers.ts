@@ -1,4 +1,5 @@
 // oxlint-disable import/max-dependencies -- Catalogue controllers coordinate domain payloads, durable addition identity, and mutation feedback.
+import { fetchCatalogueDetail } from "./useReadPage.ts";
 import { bottleResourceSchema } from "../shared/catalogue-resources.ts";
 import { contentDigest } from "../shared/addition-operation.ts";
 import { PendingAdditionChangedError, useAdditionOperation } from "./useAdditionOperation.ts";
@@ -131,9 +132,11 @@ export function useBottleController({
       actor.current.getAuthHeaders === getAuthHeaders;
     setStatus("Loading bottle details...");
     try {
-      const response = await fetch(`/api/bottles/${encodeURIComponent(target.id)}`, {
-        headers: await getAuthHeaders(),
-      });
+      const response = await fetchCatalogueDetail(
+        "/api/bottles",
+        target.id,
+        await getAuthHeaders(),
+      );
       if (!response.ok) throw new Error("Bottle details unavailable");
       const payload: unknown = await response.json();
       const detail = bottleResourceSchema.parse(objectProperty(payload, "data"));

@@ -20,11 +20,13 @@ export type ReadPageController<Page> = {
 
 // The Worker limits the whole request URL to 16 KiB. Legacy stored IDs can
 // exceed that once encoded in a continuation token or a list of capture IDs.
+const maximumUrlLength = 16 * 1024;
+
 export async function fetchCatalogueQuery(
   url: URL,
   headers: Record<string, string>,
 ): Promise<Response> {
-  if (url.href.length < 16 * 1024) return fetch(url.pathname + url.search, { headers });
+  if (url.href.length < maximumUrlLength) return fetch(url.pathname + url.search, { headers });
   const body =
     url.pathname === "/api/bottle-capture-statuses"
       ? { captureIds: url.searchParams.getAll("captureId") }
@@ -33,6 +35,25 @@ export async function fetchCatalogueQuery(
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+export async function fetchCatalogueDetail(
+  collection: string,
+  id: string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  const path = collection + "/" + encodeURIComponent(id);
+  if (
+    id !== "." &&
+    id !== ".." &&
+    new URL(path, window.location.origin).href.length < maximumUrlLength
+  )
+    return fetch(path, { headers });
+  return fetch(collection + "/detail", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ id }),
   });
 }
 

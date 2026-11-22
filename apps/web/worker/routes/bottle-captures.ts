@@ -14,7 +14,7 @@ import { z } from "zod";
 import { requireAuthenticatedUser, requireSitePermission } from "../api/auth.ts";
 import { created, noContent } from "../api/http.ts";
 import { optionalText } from "../api/ids.ts";
-import { readRequestJson } from "../api/request-body.ts";
+import { readDetailId, readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
 import { getCommittedCaptureImport, importReviewedCapture } from "../bottle-importer.ts";
 import type { ImportCandidate } from "../bottle-extractor.ts";
@@ -95,22 +95,8 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       }),
     );
   })
-  .get("/bottle-captures/:captureId", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const authenticatedUser = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    return context.json({
-      data: await getBottleCapture({
-        captureId: context.req.param("captureId"),
-        database,
-        userId: authenticatedUser.userId,
-      }),
-    });
-  })
+  .on("GET", "/bottle-captures/:captureId", readCapture)
+  .on("POST", "/bottle-captures/detail", readCapture)
   .get("/bottle-captures/:captureId/images/:imageAssetId", async (context) => {
     const database = createD1Client(context.env.DB);
     const authenticatedUser = await requireAuthenticatedUser({
@@ -487,6 +473,23 @@ async function readStatuses(context: Context<{ Bindings: Bindings }>) {
         context.req.method === "POST"
           ? captureStatusQuerySchema.parse(await readRequestJson(context.req.raw)).captureIds
           : (context.req.queries("captureId") ?? []),
+      database,
+      userId: authenticatedUser.userId,
+    }),
+  });
+}
+
+async function readCapture(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const authenticatedUser = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  return context.json({
+    data: await getBottleCapture({
+      captureId: await readDetailId(context.req.raw, context.req.param("captureId")),
       database,
       userId: authenticatedUser.userId,
     }),
