@@ -12,6 +12,16 @@ afterEach(() => {
 });
 
 describe("catalogue URL state", () => {
+  it("clears a location from state and URL when another site is selected", () => {
+    window.history.replaceState(null, "", "/?siteId=first&storageLocationId=rack");
+    const { result } = renderHook(useCatalogueUrlState);
+    act(() => {
+      result.current.setSiteIdFilter("second");
+    });
+    expect(result.current.storageLocationIdFilter).toBe("");
+    expect(new URL(window.location.href).searchParams.has("storageLocationId")).toBe(false);
+  });
+
   it("validates enum parameters and reads filters", () => {
     const state = catalogueStateFromUrl(
       new URL("https://example.test/?area=management&grouping=invalid&q=shiraz"),

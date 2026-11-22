@@ -2,13 +2,13 @@ import { entityIdSchema } from "../../shared/entity-id.ts";
 import { createBottleCapture } from "../capture-intake.ts";
 // oxlint-disable import/max-dependencies -- Capture route composes storage, workflow, OCR, import, and authorization boundaries.
 import { createD1Client } from "@chikachow/booze-db";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { captureReviewCandidateSchema, isIdentifiedCapture } from "../../shared/capture-review.ts";
 import { candidateValidationIssueSchema } from "../../shared/catalogue-inputs.ts";
 import { additionOperationIdSchema } from "../../shared/addition-operation.ts";
 import { entityIdSchema } from "../../shared/entity-id.ts";
-import { captureListQuerySchema } from "../capture-query-inputs.ts";
+import { captureListQuerySchema, captureStatusQuerySchema } from "../capture-query-inputs.ts";
 import { validateBottleQuantity } from "../../shared/quantity.ts";
 import { z } from "zod";
 
@@ -39,39 +39,10 @@ const manualImportSchema = z.object({
 });
 
 export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
-  .get("/bottle-captures", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const authenticatedUser = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    const query = captureListQuerySchema.parse({
-      limit: context.req.query("limit"),
-      pageToken: context.req.query("pageToken"),
-      view: context.req.query("view"),
-    });
-    return context.json(
-      await listBottleCaptures({ database, query, userId: authenticatedUser.userId }),
-    );
-  })
-  .get("/bottle-capture-statuses", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const authenticatedUser = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    return context.json({
-      data: await listBottleCaptureStatuses({
-        captureIds: context.req.queries("captureId") ?? [],
-        database,
-        userId: authenticatedUser.userId,
-      }),
-    });
-  })
+  .on("GET", "/bottle-captures", readCaptures)
+  .on("POST", "/bottle-captures/query", readCaptures)
+  .on("GET", "/bottle-capture-statuses", readStatuses)
+  .on("POST", "/bottle-capture-statuses/query", readStatuses)
   .on("POST", ["/bottle-captures", "/additions/bottle-captures"], async (context) => {
     const contentType = context.req.header("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
@@ -485,4 +456,40 @@ async function captureSubmissionResult({
     };
   }
   return { captureId, workflowInstanceId: capture.workflowInstanceId, intakeComplete };
+}
+
+async function readCaptures(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const authenticatedUser = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  const query = captureListQuerySchema.parse(
+    context.req.method === "POST" ? await readRequestJson(context.req.raw) : context.req.query(),
+  );
+  return context.json(
+    await listBottleCaptures({ database, query, userId: authenticatedUser.userId }),
+  );
+}
+
+async function readStatuses(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const authenticatedUser = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  return context.json({
+    data: await listBottleCaptureStatuses({
+      captureIds:
+        context.req.method === "POST"
+          ? captureStatusQuerySchema.parse(await readRequestJson(context.req.raw)).captureIds
+          : (context.req.queries("captureId") ?? []),
+      database,
+      userId: authenticatedUser.userId,
+    }),
+  });
 }

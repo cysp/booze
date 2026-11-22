@@ -309,9 +309,11 @@ await describe("bounded capture reads", async () => {
     assert.ok(first.nextPageToken.length > 16_384);
     const second = capturePageSchema.parse(
       await (
-        await fixture.request(
-          `/bottle-captures?${new URLSearchParams({ limit: "1", pageToken: first.nextPageToken })}`,
-        )
+        await fixture.request("/bottle-captures/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ limit: 1, pageToken: first.nextPageToken }),
+        })
       ).json(),
     );
     assert.equal(second.data[0]?.id, `${id}second`);

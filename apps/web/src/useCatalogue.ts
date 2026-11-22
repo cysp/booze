@@ -26,6 +26,7 @@ import {
   type SiteItem,
 } from "./inventory-model.ts";
 import {
+  fetchCatalogueQuery,
   useReadPage,
   type AuthHeadersProvider,
   type RefreshResult,
@@ -254,9 +255,10 @@ export function useCatalogue(
     try {
       const snapshots = [];
       const query = new URLSearchParams(ids.map((id) => ["captureId", id]));
-      const response = await fetch(`/api/bottle-capture-statuses?${query.toString()}`, {
-        headers: await getAuthHeaders(),
-      });
+      const response = await fetchCatalogueQuery(
+        new URL(`/api/bottle-capture-statuses?${query.toString()}`, window.location.origin),
+        await getAuthHeaders(),
+      );
       if (!response.ok) throw new Error("Capture status read failed");
       const { captureStatusPageSchema } = await import("../shared/capture-read-resources.ts");
       snapshots.push(...captureStatusPageSchema.parse(await response.json()).data);

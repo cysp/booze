@@ -52,6 +52,7 @@ async function openReview(user: ReturnType<typeof userEvent.setup>): Promise<voi
 
 function captureElement({
   captures = capturesFixture,
+  isLoading = false,
   wines = [],
   onDelete = resolvedTrue,
   onImport = resolvedImport,
@@ -61,6 +62,7 @@ function captureElement({
   onCancelAddition,
 }: {
   readonly captures?: readonly CaptureResource[];
+  readonly isLoading?: boolean;
   readonly wines?: readonly WineOption[];
   readonly onDelete?: (captureId: string) => Promise<boolean>;
   readonly onImport?: CaptureImportAction;
@@ -91,6 +93,7 @@ function captureElement({
   );
   return (
     <CaptureArea
+      isLoading={isLoading}
       captures={captures.map((capture) =>
         captureSummarySchema.parse({
           ...capture,
@@ -626,6 +629,8 @@ it("keeps an opened dirty capture mounted when a refreshed page no longer contai
   const newer = Array.from({ length: 50 }, (_, index) =>
     captureFixture({ id: `new-${index}`, status: "queued" }),
   );
+  rerender(captureElement({ captures: [], isLoading: true }));
+  expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
   rerender(captureElement({ captures: newer }));
   expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
   expect(screen.getByText("Showing 50 of 50 matching captures")).toBeVisible();

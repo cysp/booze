@@ -1,5 +1,5 @@
 import { createD1Client } from "@chikachow/booze-db";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { requireAuthenticatedUser } from "../api/auth.ts";
 import { created, locationHeader, noContent } from "../api/http.ts";
 import { getBottle, getCatalogueSummary, queryInventory } from "../api/inventory.ts";
@@ -15,17 +15,8 @@ import {
 } from "../catalogue-operations.ts";
 
 export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
-  .get("/bottles", async (context) => {
-    const database = createD1Client(context.env.DB);
-    const { userId } = await requireAuthenticatedUser({
-      database,
-      request: context.req.raw,
-      headers: context.req.raw.headers,
-      secretKey: context.env.CLERK_SECRET_KEY,
-    });
-    const input = inventoryQuerySchema.parse(context.req.query());
-    return context.json(await queryInventory({ database, userId, input }));
-  })
+  .on("GET", "/bottles", readInventory)
+  .on("POST", "/bottles/query", readInventory)
   .get("/bottles/:bottleId", async (context) => {
     const database = createD1Client(context.env.DB);
     const { userId } = await requireAuthenticatedUser({
@@ -87,3 +78,17 @@ export const bottleRoutes = new Hono<{ Bindings: Bindings }>()
     await deleteBottle({ database, userId, source: "http" }, context.req.param("bottleId"));
     return noContent();
   });
+
+async function readInventory(context: Context<{ Bindings: Bindings }>) {
+  const database = createD1Client(context.env.DB);
+  const { userId } = await requireAuthenticatedUser({
+    database,
+    request: context.req.raw,
+    headers: context.req.raw.headers,
+    secretKey: context.env.CLERK_SECRET_KEY,
+  });
+  const input = inventoryQuerySchema.parse(
+    context.req.method === "POST" ? await readRequestJson(context.req.raw) : context.req.query(),
+  );
+  return context.json(await queryInventory({ database, userId, input }));
+}
