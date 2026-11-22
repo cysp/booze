@@ -132,6 +132,50 @@ describe("DestructiveActionDialog", () => {
     expect(cancel).toHaveFocus();
   });
 
+  it("restores focus to the section when a confirmed dialog closes after the next frames", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    function content(open: boolean) {
+      return (
+        <>
+          <h2 id="sites" tabIndex={-1}>
+            Sites
+          </h2>
+          <button type="button">Delete site</button>
+          {open ? (
+            <DestructiveActionDialog
+              actionLabel="Confirm deletion"
+              description="This cannot be undone."
+              fallbackFocus={() => document.querySelector<HTMLHeadingElement>("#sites")}
+              failureMessage="Site was not deleted."
+              isOpen
+              title="Delete this site?"
+              onAction={async () => true}
+              onOpenChange={onOpenChange}
+            />
+          ) : null}
+        </>
+      );
+    }
+    const view = render(content(false));
+    screen.getByRole("button", { name: "Delete site" }).focus();
+    view.rerender(content(true));
+    await user.click(screen.getByRole("button", { name: "Confirm deletion" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    // The owner can commit the requested close after the next pair of animation frames.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
+    view.rerender(content(false));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Sites" })).toHaveFocus();
+    });
+  });
+
   it("restores safe focus when an animation frame runs before the failure commit", async () => {
     const user = userEvent.setup();
     let resolveAction: ((result: boolean) => void) | undefined;
