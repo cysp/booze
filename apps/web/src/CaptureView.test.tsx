@@ -243,7 +243,10 @@ describe("CaptureArea photo picker", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Only 4 photos can be attached. 1 extra file was not added.",
     );
-    expect(screen.getByRole("button", { name: "Add more bottle photos" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add more bottle photos" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("silently ignores a duplicate without claiming a cap rejection", async () => {
@@ -406,8 +409,11 @@ it("saves manual corrections separately and requires an explicit revision-aware 
   await openReview(user);
   await user.clear(screen.getByRole("textbox", { name: "Producer / winery" }));
   await user.type(screen.getByRole("textbox", { name: "Producer / winery" }), "RIKARD");
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Create new" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Retry" })).toHaveAttribute("aria-disabled", "true");
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   expect(onSaveReview).toHaveBeenCalledOnce();
   expect(onSaveReview.mock.calls[0]?.slice(0, 2)).toEqual(["capture-1", 0]);
@@ -444,8 +450,11 @@ it("retains cleared values and edits when saving corrections fails", async () =>
   expect(
     screen.getByText("Another editor changed this capture. Refresh before saving."),
   ).toBeVisible();
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Create new" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Retry" })).toHaveAttribute("aria-disabled", "true");
 });
 
 it("requires saving an empty manual review before explicit unidentified import", async () => {
@@ -458,7 +467,10 @@ it("requires saving an empty manual review before explicit unidentified import",
     onImport,
   });
   await openReview(user);
-  expect(screen.getByRole("button", { name: "Save as unidentified wine" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save as unidentified wine" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   await user.click(screen.getByRole("button", { name: "Save corrections" }));
   expect(onImport).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Save as unidentified wine" }));
@@ -513,7 +525,10 @@ it.each([
   });
   await openReview(user);
   expect(screen.queryByRole("button", { name: "Use Existing Shiraz" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Use selected wine" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Use selected wine" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   await user.click(screen.getByRole("combobox", { name: "Existing wine in this site" }));
   expect(screen.getByRole("option", { name: /first-wine/u })).toBeVisible();
   expect(screen.queryByRole("option", { name: /Other site wine/u })).not.toBeInTheDocument();
@@ -555,8 +570,14 @@ it.each([0, 1])(
     expect(producer).toHaveAttribute("readonly");
     await user.type(producer, "unavailable edit");
     expect(producer).toHaveValue("My unsaved correction");
-    expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save corrections" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Create new" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     rerender(
       captureElement({
         captures: [{ ...capture, status: "needs_review", latestRun: incompleteRun }],
@@ -566,6 +587,10 @@ it.each([0, 1])(
       "My unsaved correction",
     );
     await user.click(screen.getByRole("button", { name: "Save corrections" }));
+    expect(screen.getByRole("button", { name: "Retry" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
   },
 );
@@ -621,7 +646,10 @@ it("retains a local draft for reference when another editor imports the capture"
   await user.type(notes, "unavailable edit");
   expect(notes).toHaveValue("Unsubmitted bottle correction");
   expect(screen.getByText(/was imported elsewhere/u)).toBeVisible();
-  expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save corrections" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
 });
 
 it("keeps an opened dirty capture mounted when a refreshed page no longer contains it", async () => {
@@ -638,7 +666,10 @@ it("keeps an opened dirty capture mounted when a refreshed page no longer contai
   rerender(captureElement({ captures: newer }));
   expect(screen.getByRole("textbox", { name: "Bottle notes" })).toHaveValue("Keep this draft");
   expect(screen.getByText("Showing 50 of 50 matching captures")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Close details" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Close details" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
 });
 
 it("retains an off-page review draft when capture deletion is cancelled", async () => {

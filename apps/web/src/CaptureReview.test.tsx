@@ -126,7 +126,10 @@ it("preserves unsaved corrections when a newer extraction arrives", async () => 
     />,
   );
   expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue("Manual producer");
-  expect(screen.getByRole("button", { name: "Create new" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Create new" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   expect(onImport).not.toHaveBeenCalled();
 });
 
@@ -167,7 +170,10 @@ it("offers explicit recovery from concurrent corrections without silently discar
   );
   await user.click(screen.getByRole("button", { name: "Load latest corrections" }));
   expect(screen.getByRole("textbox", { name: "Producer / winery" })).toHaveValue("Other editor");
-  expect(screen.getByRole("button", { name: "Save corrections" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save corrections" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
 });
 
 it("adopts newer extraction after local changes are undone instead of importing unseen facts", async () => {

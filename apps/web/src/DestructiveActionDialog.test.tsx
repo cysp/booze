@@ -152,7 +152,7 @@ describe("DestructiveActionDialog", () => {
     );
     const cancel = screen.getByRole("button", { name: "Cancel" });
     await user.click(screen.getByRole("button", { name: "Delete capture" }));
-    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveAttribute("aria-disabled", "true");
 
     const frames: FrameRequestCallback[] = [];
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => {
@@ -166,10 +166,11 @@ describe("DestructiveActionDialog", () => {
           setTimeout(resolve, 0);
         });
         // React has queued its state updates, but the disabled DOM has not committed yet.
-        expect(cancel).toBeDisabled();
+        expect(cancel).toHaveAttribute("aria-disabled", "true");
         for (const frame of frames.splice(0)) frame(0);
       });
       expect(screen.getByRole("alert")).toHaveTextContent("Capture was not deleted.");
+      expect(cancel).not.toHaveAttribute("aria-disabled", "true");
       expect(cancel).toBeEnabled();
       expect(cancel).toHaveFocus();
     } finally {

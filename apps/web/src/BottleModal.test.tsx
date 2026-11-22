@@ -222,8 +222,19 @@ describe("BottleModal destructive actions", () => {
     expect(winery).toBeDisabled();
     await user.type(winery, "unavailable edit");
     expect(winery).toHaveValue(item.wineryName ?? "");
-    expect(screen.getByRole("button", { name: "Mark drunk" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete bottle" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Mark drunk" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Delete bottle" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    const deleteButton = screen.getByRole("button", { name: "Delete bottle" });
+    await user.click(deleteButton);
+    deleteButton.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
     const form = winery.closest("form");
     if (form === null) {
       throw new Error("Missing bottle form");
@@ -238,6 +249,10 @@ describe("BottleModal destructive actions", () => {
     resolveSave?.({ ok: false, message: "Temporary failure" });
     expect(await screen.findByText("Temporary failure")).toBeVisible();
     expect(winery).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mark drunk" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "Mark drunk" })).toBeEnabled();
   });
 
@@ -259,7 +274,10 @@ describe("BottleModal destructive actions", () => {
       />,
     );
     await user.type(screen.getByRole("textbox", { name: "Bottle notes" }), "Opened tonight");
-    expect(screen.getByRole("button", { name: "Mark drunk" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Mark drunk" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByText("Save your changes before marking this bottle drunk.")).toBeVisible();
     expect(onMarkConsumed).not.toHaveBeenCalled();
   });
