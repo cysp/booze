@@ -45,14 +45,26 @@ export function containsText(expression: SQLWrapper, value: string): SQL {
   return sql`lower(coalesce(${expression}, '')) like ${likePattern(value)} escape '\\'`;
 }
 
+export function jsonArrayContainsText(
+  expression: SQLWrapper,
+  value: string | undefined,
+): SQL | undefined {
+  if (value === undefined) return undefined;
+  return sql`exists (select 1 from json_each(${expression}) as items where ${containsText(sql`items.value`, value)})`;
+}
+
 export function containsAnyText(
   value: string | undefined,
   expressions: readonly SQLWrapper[],
+  jsonArray?: SQLWrapper,
 ): SQL | undefined {
   if (value === undefined) {
     return undefined;
   }
-  return orAll(expressions.map((expression) => containsText(expression, value)));
+  return orAll([
+    ...expressions.map((expression) => containsText(expression, value)),
+    jsonArray === undefined ? undefined : jsonArrayContainsText(jsonArray, value),
+  ]);
 }
 
 export function drinkStatusExpression(now = new Date()): SQL<string> {

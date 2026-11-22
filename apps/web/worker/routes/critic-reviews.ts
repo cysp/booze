@@ -1,6 +1,7 @@
 import { createD1Client } from "@chikachow/booze-db";
 import { Hono } from "hono";
 import { z } from "zod";
+import { entityIdSchema } from "../../shared/entity-id.ts";
 
 import { requireAuthenticatedUser } from "../api/auth.ts";
 import {
@@ -16,7 +17,7 @@ import { readRequestJson } from "../api/request-body.ts";
 import type { Bindings } from "../api/types.ts";
 
 const reviewSourceInputSchema = z.object({
-  siteId: z.string().trim().min(1),
+  siteId: entityIdSchema,
   name: z.string().trim().min(1).max(160),
   sourceType: z.string().trim().min(1).max(80).default("critic"),
   url: z.url().trim().max(500).optional().or(z.literal("")),
@@ -25,21 +26,21 @@ const reviewSourceInputSchema = z.object({
 });
 
 const listReviewSourcesSchema = z.object({
-  siteId: z.string().trim().min(1).optional(),
+  siteId: entityIdSchema.optional(),
 });
 
 const listCriticReviewsSchema = z.object({
-  wineVintageId: z.string().trim().min(1).optional(),
+  wineVintageId: entityIdSchema.optional(),
 });
 
 const upsertCriticReviewSchema = z.object({
-  wineVintageId: z.string().trim().min(1),
+  wineVintageId: entityIdSchema,
   review: criticReviewInputSchema,
 });
 
 const replaceCriticReviewsSchema = z.object({
-  siteId: z.string().trim().min(1),
-  wineVintageId: z.string().trim().min(1),
+  siteId: entityIdSchema,
+  wineVintageId: entityIdSchema,
   reviews: z.array(criticReviewInputSchema).max(24),
 });
 
