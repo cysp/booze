@@ -5,7 +5,7 @@ import {
   type createD1Client,
 } from "@chikachow/booze-db";
 import { and, eq, isNull, or } from "drizzle-orm";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CellarToolRegistration } from "./server.ts";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
@@ -44,26 +44,13 @@ const listCriticReviewsCursorSchema = z.strictObject({
   reviewId: z.string(),
 });
 
-type ToolAnnotations = {
-  readonly destructiveHint: boolean;
-  readonly idempotentHint: boolean;
-  readonly openWorldHint: boolean;
-  readonly readOnlyHint: boolean;
-};
-
 export function registerCriticReviewTools({
   database,
   readOnlyToolAnnotations,
   server,
   userId,
   writeToolAnnotations,
-}: {
-  readonly database: ReturnType<typeof createD1Client>;
-  readonly readOnlyToolAnnotations: ToolAnnotations;
-  readonly server: McpServer;
-  readonly userId: string;
-  readonly writeToolAnnotations: ToolAnnotations;
-}): void {
+}: CellarToolRegistration): void {
   server.registerTool(
     "cellar.list_review_sources",
     {

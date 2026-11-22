@@ -64,6 +64,7 @@ export async function listBottleSummaries({
     database,
     input,
     toolName: searchBottlesToolName,
+    status: input.status ?? "in_stock",
     userId,
     where: ({ grapeVarietyNames }) => [
       optionalEquals(bottles.siteId, input.siteId),
@@ -161,6 +162,7 @@ async function listBottleSummaryRows({
   database,
   input,
   toolName,
+  status = "in_stock",
   userId,
   where,
 }: {
@@ -170,6 +172,7 @@ async function listBottleSummaryRows({
     | z.infer<typeof listDrinkQueueInputSchema>
     | z.infer<typeof locationInventoryInputSchema>;
   readonly toolName: string;
+  readonly status?: "in_stock" | "consumed";
   readonly userId: string;
   readonly where: (context: BottleSummaryWhereContext) => readonly (SQL | undefined)[];
 }): Promise<Page<ReturnType<typeof summarizeBottle>>> {
@@ -261,7 +264,7 @@ async function listBottleSummaryRows({
     .where(
       andAll([
         eq(siteMemberships.userId, userId),
-        eq(bottles.status, "in_stock"),
+        eq(bottles.status, status),
         ...where({ grapeVarietyNames: grapeVarietiesByWine.grapeVarieties }),
         cursorPredicate({
           cursor,

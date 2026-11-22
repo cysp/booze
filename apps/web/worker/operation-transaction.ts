@@ -106,7 +106,13 @@ export function createOperationAudit({
   readonly context: OperationContext;
   readonly siteId: string | SQL;
   readonly action: string;
-  readonly targetKind: "bottle" | "critic_review" | "location" | "review_source" | "wine";
+  readonly targetKind:
+    | "bottle"
+    | "capture"
+    | "critic_review"
+    | "location"
+    | "review_source"
+    | "wine";
   readonly targetId: string | SQL;
   readonly input: Readonly<Record<string, unknown>>;
   readonly before: SQL;

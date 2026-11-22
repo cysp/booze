@@ -7,7 +7,7 @@ export const mcpToolAuditEventInputSchema = z.strictObject({
   before: z.record(z.string(), z.unknown()),
   input: z.record(z.string(), z.unknown()),
   siteId: z.string().nullable(),
-  targetKind: z.enum(["bottle", "critic_review", "location", "review_source", "wine"]),
+  targetKind: z.enum(["bottle", "capture", "critic_review", "location", "review_source", "wine"]),
   targetMcpId: z.string().min(1),
   targetPersistedId: z.string().min(1),
   toolName: z.string().min(1),

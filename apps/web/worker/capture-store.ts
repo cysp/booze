@@ -10,7 +10,11 @@ import {
   type BoozeDatabase,
 } from "@chikachow/booze-db";
 import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { commitOperation } from "./operation-transaction.ts";
+import {
+  commitOperation,
+  createOperationAudit,
+  type OperationContext,
+} from "./operation-transaction.ts";
 import { HTTPException } from "hono/http-exception";
 
 import type { CaptureReviewCandidate } from "../shared/capture-review.ts";
@@ -462,46 +466,78 @@ export async function updateCaptureStatus({
   return updated.length === 1;
 }
 
-export async function saveCaptureReview({
-  captureId,
-  database,
-  candidate,
-  expectedRevision,
-  siteId,
-  userId,
-}: {
+type CaptureReviewState = { readonly reviewRevision: number; readonly status: string };
+export async function saveCaptureReview(
+  context: OperationContext,
+  {
+    captureId,
+    candidate,
+    expectedRevision,
+  }: {
+    readonly captureId: string;
+    readonly candidate: CaptureReviewCandidate;
+    readonly expectedRevision: number;
+  },
+): Promise<{
   readonly captureId: string;
-  readonly database: BoozeDatabase;
-  readonly candidate: CaptureReviewCandidate;
-  readonly expectedRevision: number;
   readonly siteId: string;
-  readonly userId: string;
-}): Promise<number> {
-  const [, [saved]] = await commitOperation({ database, userId, source: "http" }, siteId, [
+  readonly before: CaptureReviewState;
+  readonly after: CaptureReviewState;
+  readonly changed: true;
+  readonly affectedRecordCount: 1;
+}> {
+  const { database, userId } = context;
+  const [capture] = await database
+    .select({
+      siteId: bottleCaptures.siteId,
+      status: bottleCaptures.status,
+    })
+    .from(bottleCaptures)
+    .innerJoin(siteMemberships, eq(siteMemberships.siteId, bottleCaptures.siteId))
+    .where(and(eq(bottleCaptures.id, captureId), eq(siteMemberships.userId, userId)))
+    .limit(1);
+  if (capture === undefined) throw new HTTPException(404, { message: "Capture not found" });
+
+  const { siteId } = capture;
+  const currentDraft = and(
+    eq(bottleCaptures.id, captureId),
+    eq(bottleCaptures.siteId, siteId),
+    eq(bottleCaptures.reviewRevision, expectedRevision),
+    eq(bottleCaptures.status, capture.status),
+    inArray(bottleCaptures.status, ["failed", "needs_review"]),
+  );
+  const before = { reviewRevision: expectedRevision, status: capture.status };
+  const after = { reviewRevision: expectedRevision + 1, status: "needs_review" };
+  const audit = createOperationAudit({
+    context,
+    siteId,
+    action: "cellar.save_capture_review",
+    targetKind: "capture",
+    targetId: captureId,
+    input: { expectedRevision },
+    before: sql`${JSON.stringify(before)}`,
+    condition: sql`exists (select 1 from ${bottleCaptures} where ${currentDraft})`,
+  });
+  const [, , [saved]] = await commitOperation(context, siteId, [
+    audit.begin,
     database
       .update(bottleCaptures)
       .set({
         reviewCandidateJson: JSON.stringify(candidate),
-        reviewRevision: sql`${bottleCaptures.reviewRevision} + 1`,
-        status: "needs_review",
+        reviewRevision: after.reviewRevision,
+        status: after.status,
         updatedAt: sql`CURRENT_TIMESTAMP`,
       })
-      .where(
-        and(
-          eq(bottleCaptures.id, captureId),
-          eq(bottleCaptures.siteId, siteId),
-          eq(bottleCaptures.reviewRevision, expectedRevision),
-          sql`${bottleCaptures.status} IN ('failed', 'needs_review')`,
-        ),
-      )
-      .returning({ revision: bottleCaptures.reviewRevision }),
+      .where(currentDraft)
+      .returning({ id: bottleCaptures.id }),
+    audit.finish(sql`${JSON.stringify(after)}`),
   ]);
   if (saved === undefined)
     throw new HTTPException(409, {
       message:
         "Capture processing or saved corrections changed. Refresh before saving your corrections again.",
     });
-  return saved.revision;
+  return { captureId, siteId, before, after, changed: true, affectedRecordCount: 1 };
 }
 
 export async function ensureManualCaptureRun({

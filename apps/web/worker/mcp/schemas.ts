@@ -11,7 +11,7 @@ export const drinkStatusSchema = z.enum([
 
 export const drinkQueueStatuses = ["drink-now", "drink-soon", "past-window"] as const;
 
-const paginationInputSchema = {
+export const paginationInputSchema = {
   limit: z
     .number()
     .int()
@@ -55,6 +55,10 @@ const criticReviewIdInputSchema = entityIdSchema.describe(
 );
 
 export const searchBottlesInputSchema = z.strictObject({
+  status: z
+    .enum(["in_stock", "consumed"])
+    .optional()
+    .describe("Bottle status. Defaults to in_stock."),
   query: searchQueryInputSchema.optional(),
   siteId: siteIdInputSchema.optional(),
   locationId: storageLocationIdInputSchema.optional(),

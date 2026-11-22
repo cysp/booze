@@ -80,7 +80,11 @@ async function setup(context: TestContext) {
       "INSERT INTO critic_reviews (id, site_id, wine_vintage_id, review_source_id, rating_text) VALUES (?, ?, ?, ?, '95 points')",
     )
     .run(ids.review, ids.site, ids.wine, ids.source);
-  const server = createBoozeMcpServer({ database: createD1Client(asD1(sqlite)), userId: "owner" });
+  const server = createBoozeMcpServer({
+    requestUrl: new URL("http://localhost/mcp"),
+    database: createD1Client(asD1(sqlite)),
+    userId: "owner",
+  });
   const client = new Client({ name: "canonical-identity-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);

@@ -1,8 +1,16 @@
 // oxlint-disable import/max-dependencies -- MCP composition root registers the complete tool surface.
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { createD1Client } from "@chikachow/booze-db";
-import { consumeBottle, moveBottle } from "../catalogue-operations.ts";
+import {
+  addBottles,
+  bottleAdditionResultSchema,
+  consumeBottle,
+  createBottleSchema,
+  moveBottle,
+  restoreBottle,
+} from "../catalogue-operations.ts";
 import { createStorageLocation } from "../location-operations.ts";
 import { setDrinkingWindow } from "../wine-operations.ts";
 import { getBottle, withDrinkStatus } from "../api/inventory.ts";
@@ -12,6 +20,7 @@ import {
   listDrinkQueueBottleSummaries,
   listLocationBottleSummaries,
 } from "./bottles.ts";
+import { registerCaptureTools } from "./captures.ts";
 import { registerCriticReviewTools } from "./critic-reviews.ts";
 import {
   getInventorySummary,
@@ -77,6 +86,11 @@ export const boozeMcpToolNames = [
   "cellar.create_storage_location",
   "cellar.set_bottle_location",
   "cellar.mark_bottle_consumed",
+  "cellar.restore_bottle",
+  "cellar.add_bottles",
+  "cellar.list_captures",
+  "cellar.get_capture_review",
+  "cellar.save_capture_review",
 ] as const;
 
 const readOnlyClosedWorldToolAnnotations = {
@@ -92,12 +106,22 @@ const writeClosedWorldToolAnnotations = {
   readOnlyHint: false,
 };
 
+export type CellarToolRegistration = {
+  readonly database: ReturnType<typeof createD1Client>;
+  readonly server: McpServer;
+  readonly userId: string;
+  readonly readOnlyToolAnnotations: ToolAnnotations;
+  readonly writeToolAnnotations: ToolAnnotations;
+};
+
 export function createBoozeMcpServer({
   database,
+  requestUrl,
   userId,
 }: {
   readonly database: ReturnType<typeof createD1Client>;
   readonly userId: string;
+  readonly requestUrl: URL;
 }): McpServer {
   const server = new McpServer({ name: MCP_NAME, version: MCP_VERSION });
 
@@ -106,7 +130,8 @@ export function createBoozeMcpServer({
     {
       annotations: readOnlyClosedWorldToolAnnotations,
       title: "Search bottles",
-      description: "Search authorised in-stock wine bottles and return compact bottle summaries.",
+      description:
+        "Search authorised bottles. Defaults to in-stock bottles. Use status consumed to find bottles to restore.",
       inputSchema: searchBottlesInputSchema,
       outputSchema: bottleSummaryListOutputSchema,
     },
@@ -197,13 +222,15 @@ export function createBoozeMcpServer({
     },
   );
 
-  registerCriticReviewTools({
+  const registration = {
     database,
-    readOnlyToolAnnotations: readOnlyClosedWorldToolAnnotations,
     server,
     userId,
+    readOnlyToolAnnotations: readOnlyClosedWorldToolAnnotations,
     writeToolAnnotations: writeClosedWorldToolAnnotations,
-  });
+  };
+  registerCaptureTools(registration, new URL("/?area=captures", requestUrl).href);
+  registerCriticReviewTools(registration);
 
   server.registerTool(
     "cellar.list_storage_locations",
@@ -401,6 +428,74 @@ export function createBoozeMcpServer({
           await consumeBottle({ database, userId, source: "mcp" }, bottleId),
         ),
       ),
+  );
+  server.registerTool(
+    "cellar.restore_bottle",
+    {
+      annotations: writeClosedWorldToolAnnotations,
+      title: "Restore a consumed bottle",
+      description:
+        "Return a consumed bottle to stock with its retained location. An in-stock bottle is unchanged.",
+      inputSchema: getBottleInputSchema,
+      outputSchema: setBottleLocationOutputSchema.shape,
+    },
+    async ({ bottleId }) =>
+      toolJson(
+        setBottleLocationOutputSchema.parse(
+          await restoreBottle({ database, userId, source: "mcp" }, bottleId),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "cellar.add_bottles",
+    {
+      annotations: { ...writeClosedWorldToolAnnotations, destructiveHint: false },
+      title: "Add bottles to stock",
+      description:
+        "Record a manual inventory addition. Provide one existing wineId or new wine details. For a photo capture, save its draft and ask the user to confirm in Captures. Reuse the operationId and identical inputs on retries to receive the original receipt and bottle count.",
+      inputSchema: createBottleSchema
+        .pick({
+          siteId: true,
+          quantity: true,
+          storageLocationId: true,
+          positionHint: true,
+          wine: true,
+          bottle: true,
+          allowUnidentified: true,
+        })
+        .extend({
+          operationId: createBottleSchema.shape.operationId.describe(
+            "A new UUID for each distinct addition. Keep it across retries.",
+          ),
+          wineId: getWineInputSchema.shape.wineId.optional(),
+        })
+        .strict()
+        .refine(({ wine, wineId }) => (wine === undefined) !== (wineId === undefined), {
+          message: "Specify exactly one of wine or wineId.",
+        }),
+      outputSchema: {
+        operationId: createBottleSchema.shape.operationId,
+        before: z.null(),
+        after: bottleAdditionResultSchema,
+        affectedRecordCount: z.number().int().positive(),
+      },
+    },
+    async ({ wineId, ...input }) => {
+      const after = await addBottles(
+        { database, userId, source: "mcp" },
+        {
+          ...input,
+          ...(wineId === undefined ? {} : { wineVintageId: wineId }),
+        },
+      );
+      return toolJson({
+        operationId: input.operationId,
+        before: null,
+        after,
+        affectedRecordCount: after.bottleIds.length,
+      });
+    },
   );
   return server;
 }
