@@ -175,6 +175,55 @@ await describe("capture Workflow draft creation", async () => {
     );
   });
 
+  await it("recovers the legacy extraction and its exact candidate together without overwriting evidence", async () => {
+    const { workflow, artifacts, sqlite } = setup("extracting");
+    const key = "sites/site/captures/capture/runs/legacy-run/extraction.json";
+    const bytes = JSON.stringify({
+      captureId: "capture",
+      runId: "legacy-run",
+      extractors: [{ model: "A" }, { model: "B" }, { model: "C" }],
+      reconciliation: { disagreement: true },
+      reviewDecision: { reasons: ["vintages disagree"] },
+      importCandidate: {
+        wine: { wineryName: "Retained producer", designation: "Reserve" },
+        bottle: { volumeMl: 750 },
+        rawSuggestion: { original: true },
+      },
+    });
+    artifacts.set(key, bytes);
+    const cache = legacySteps();
+    cache.set("write extraction artifact", {
+      r2Key: key,
+      contentType: "application/json",
+      sizeBytes: new TextEncoder().encode(bytes).length,
+    });
+    assert.deepEqual(await workflow.run(event("workflow"), fixtureSteps(cache)), {
+      captureId: "capture",
+      status: "needs_review",
+    });
+    assert.equal(artifacts.get(key), bytes);
+    assert.equal(artifacts.size, 1);
+    const row = sqlite
+      .prepare(
+        "SELECT extraction_r2_key,import_candidate_json,import_result_json FROM bottle_capture_runs WHERE id='legacy-run'",
+      )
+      .get();
+    assert.equal(row?.["extraction_r2_key"], key);
+    assert.equal(
+      z
+        .object({ wine: z.object({ wineryName: z.string() }) })
+        .parse(JSON.parse(String(row?.["import_candidate_json"]))).wine.wineryName,
+      "Retained producer",
+    );
+    assert.deepEqual(
+      z
+        .object({ reviewReasons: z.array(z.string()) })
+        .parse(JSON.parse(String(row?.["import_result_json"]))).reviewReasons,
+      ["vintages disagree"],
+    );
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM bottles").get()?.["n"], 0);
+  });
+
   await it("retains legacy checkpoint evidence without inventing raw response or configuration", async () => {
     const { workflow, artifacts } = setup("extracting");
     const cache = legacySteps();
@@ -252,7 +301,16 @@ function setup(status: string) {
     CF_AIG_TOKEN: "fixture",
     AI_GATEWAY_URL: "https://ocr.invalid/chat/completions",
     IMAGE_BUCKET: {
-      async get() {
+      async get(key: string) {
+        if (key.endsWith(".json")) {
+          const bytes = artifacts.get(key);
+          return typeof bytes === "string"
+            ? {
+                size: new TextEncoder().encode(bytes).length,
+                json: async () => JSON.parse(bytes) as unknown,
+              }
+            : null;
+        }
         return { body: new Response(new Uint8Array([1, 2, 3])).body };
       },
       async put(key: string, value: unknown) {
