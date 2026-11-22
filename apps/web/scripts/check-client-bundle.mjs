@@ -53,12 +53,18 @@ export function measureClientBundle(clientDirectory) {
   if (largest === undefined) {
     throw new Error("No client JavaScript assets were built.");
   }
-  const initialCssSources = [
-    ...indexHtml.matchAll(/<link[^>]+href="\/assets\/([^"]+\.css)"[^>]*>/gu),
-  ].map((match) => match[1]);
-  const initialCssFiles = assetMeasurements.filter(({ file }) => initialCssSources.includes(file));
-  if (initialCssFiles.length === 0) {
+  const initialCssSources = new Set(
+    Array.from(
+      indexHtml.matchAll(/<link[^>]+href="\/assets\/([^"]+\.css)"[^>]*>/gu),
+      (match) => match[1],
+    ),
+  );
+  const initialCssFiles = assetMeasurements.filter(({ file }) => initialCssSources.has(file));
+  if (initialCssSources.size === 0) {
     throw new Error("Could not identify initial CSS assets from dist/client/index.html.");
+  }
+  if (initialCssFiles.length !== initialCssSources.size) {
+    throw new Error("An initial CSS asset referenced by dist/client/index.html is missing.");
   }
   const initialCss = {
     bytes: initialCssFiles.reduce((total, file) => total + file.bytes, 0),

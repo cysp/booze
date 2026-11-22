@@ -98,7 +98,7 @@ describe("measureClientBundle", () => {
     });
   });
 
-  it("rejects a missing preloaded asset rather than understating initial bytes", (context) => {
+  it("rejects missing preloaded JavaScript and a missing second stylesheet", (context) => {
     const directory = mkdtempSync(path.join(tmpdir(), "booze-bundle-test-"));
     context.after(() => {
       rmSync(directory, { recursive: true, force: true });
@@ -112,8 +112,11 @@ describe("measureClientBundle", () => {
       <script type="module" src="/assets/entry.js"></script>
       <link rel="modulepreload" href="/assets/missing.js">
       <link rel="stylesheet" href="/assets/style.css">
+      <link rel="stylesheet" href="/assets/components.css">
     `,
     );
     assert.throws(() => measureClientBundle(directory), /initial JavaScript asset.*missing/u);
+    writeFileSync(path.join(directory, "assets", "missing.js"), "export {};");
+    assert.throws(() => measureClientBundle(directory), /initial CSS asset.*missing/u);
   });
 });
