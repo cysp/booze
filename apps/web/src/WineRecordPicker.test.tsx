@@ -73,11 +73,11 @@ it("resolves an initially selected wine outside the first page through its exact
       getAuthHeaders={auth}
     />,
   );
-  await waitFor(() =>
+  await waitFor(() => {
     expect(screen.getByRole("combobox", { name: "Wine record" })).toHaveTextContent(
       "2023 Pinnacle Series Shiraz",
-    ),
-  );
+    );
+  });
   expect(requests).toContain("/api/wines/old%20%2F%20%3F%20wine");
   expect(requests.filter((request) => request.includes("pageToken"))).toEqual([]);
 });
