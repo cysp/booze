@@ -1,5 +1,11 @@
 # Deployment and data recovery
 
+## Catalogue client cutover
+
+When the release switches to stored catalogue IDs, finish or save open edits before deployment. Reload the catalogue in each open browser tab after the release. In an existing MCP conversation, call `cellar.list_sites` and the relevant wine, bottle, or storage-location list/search tool again. Use the newly returned IDs for subsequent detail and write calls. Copy IDs exactly, including any surrounding spaces. An older hashed ID cannot identify the stored record after this cutover.
+
+Repeat the browser refresh when the paged catalogue reads deploy. Verify the new browser can open a detail and fetch a subsequent page. For MCP, verify a newly listed ID opens the expected detail before making a change.
+
 ## Configuration
 
 The GitHub `production` environment supplies `VITE_CLERK_PUBLISHABLE_KEY` as a variable and `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as secrets. The publishable key is compiled into browser assets; setting only a Worker runtime key cannot configure the browser.

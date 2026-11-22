@@ -334,4 +334,22 @@ await it("preserves exact structured grape varieties and brands containing comma
     .object({ wineries: z.array(z.object({ brands: z.array(z.string()) })) })
     .parse(await call("cellar.list_wineries", { siteId: ids.site }));
   assert.deepEqual(wineries.wineries, [{ brands: [name] }]);
+  for (const filter of [{ grapeVariety: name }, { query: name }]) {
+    assert.deepEqual(
+      z.object({ wines: z.array(grapeEntity) }).parse(await call("cellar.list_wines", filter))
+        .wines,
+      wines.wines,
+    );
+    assert.deepEqual(
+      z.object({ bottles: z.array(grapeEntity) }).parse(await call("cellar.search_bottles", filter))
+        .bottles,
+      bottles.bottles,
+    );
+  }
+  assert.deepEqual(
+    z
+      .object({ wineries: z.array(z.object({ brands: z.array(z.string()) })) })
+      .parse(await call("cellar.list_wineries", { brand: name })).wineries,
+    wineries.wineries,
+  );
 });

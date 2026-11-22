@@ -16,6 +16,7 @@ import {
   containsAnyText,
   cursorPredicate,
   sqliteLower,
+  jsonArrayContainsText,
   optionalContains,
   optionalEquals,
 } from "./sql.ts";
@@ -132,16 +133,14 @@ export async function listWineries({
       andAll([
         eq(siteMemberships.userId, userId),
         optionalEquals(wineries.siteId, input.siteId),
-        optionalContains(brandNamesByWinery.brandNames, input.brand),
+        jsonArrayContainsText(brandNamesByWinery.brandNames, input.brand),
         optionalContains(wineries.region, input.region),
         optionalContains(wineries.country, input.country),
-        containsAnyText(input.query, [
-          sites.name,
-          wineries.name,
-          wineries.country,
-          wineries.region,
+        containsAnyText(
+          input.query,
+          [sites.name, wineries.name, wineries.country, wineries.region],
           brandNamesByWinery.brandNames,
-        ]),
+        ),
         cursorPredicate({
           cursor,
           sortKeys: [

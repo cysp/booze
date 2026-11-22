@@ -1,3 +1,4 @@
+import { entityIdSchema } from "../../shared/entity-id.ts";
 import { createBottleCapture } from "../capture-intake.ts";
 // oxlint-disable import/max-dependencies -- Capture route composes storage, workflow, OCR, import, and authorization boundaries.
 import { createD1Client } from "@chikachow/booze-db";
@@ -29,7 +30,7 @@ import { deleteBottleCaptureData, tryDrainR2ObjectDeletionQueue } from "../delet
 import { ensureCaptureWorkflowStarted } from "../capture-start.ts";
 
 const manualImportSchema = z.object({
-  wineVintageId: z.string().trim().min(1).optional(),
+  wineVintageId: entityIdSchema.optional(),
   expectedReviewRevision: z.number().int().nonnegative().default(0),
   allowUnidentified: z.boolean().default(false),
 });
@@ -61,7 +62,7 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       secretKey: context.env.CLERK_SECRET_KEY,
     });
     const formData = await readCaptureFormData(context.req.raw);
-    const siteId = z.string().trim().min(1).parse(stringField(formData, "siteId"));
+    const siteId = entityIdSchema.parse(stringField(formData, "siteId"));
     const operationId = additionOperationIdSchema.parse(stringField(formData, "operationId"));
     await requireSitePermission({
       database,
@@ -69,7 +70,9 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       siteId,
       userId: authenticatedUser.userId,
     });
-    const storageLocationId = optionalText(stringField(formData, "storageLocationId"));
+    const locationId = stringField(formData, "storageLocationId");
+    const storageLocationId =
+      locationId === undefined || locationId === "" ? null : entityIdSchema.parse(locationId);
     const files = formData.getAll("images").filter((entry) => entry instanceof File);
 
     const capture = await createBottleCapture({
@@ -278,9 +281,11 @@ export const bottleCaptureRoutes = new Hono<{ Bindings: Bindings }>()
       extractionIssues.success ? (extractionIssues.data.validationIssues ?? []) : []
     ).filter((issue) => {
       if (payload.wineVintageId !== undefined && issue.path.startsWith("wine.")) return false;
-      return (
-        capture.reviewCandidate === null ||
-        (issue.path === "bottle.volumeMl" && capture.reviewCandidate.bottle.volumeMl === undefined)
+      if (capture.reviewCandidate === null) return true;
+      const [section, field] = issue.path.split(".");
+      if ((section !== "wine" && section !== "bottle") || field === undefined) return true;
+      return !Object.entries(capture.reviewCandidate[section]).some(
+        ([name, value]) => name === field && value !== undefined,
       );
     });
     if (unresolved.length > 0) {

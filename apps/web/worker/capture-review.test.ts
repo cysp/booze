@@ -64,6 +64,41 @@ function setup(withRun = true) {
 }
 
 await describe("capture review corrections", async () => {
+  await it("does not clear unresolved alcohol evidence through a notes-only correction", async () => {
+    const { sqlite, request } = setup();
+    try {
+      sqlite.prepare("UPDATE bottle_capture_runs SET import_candidate_json = ?").run(
+        JSON.stringify({
+          ...candidate,
+          validationIssues: [
+            {
+              path: "wine.alcoholPercent",
+              rawValue: "about 14%",
+              message: "Enter an unambiguous alcohol percentage.",
+            },
+          ],
+        }),
+      );
+      const saved = await request("PATCH", "/review", {
+        expectedRevision: 0,
+        candidate: { ...candidate, wine: { ...candidate.wine, notes: "Check the label" } },
+      });
+      assert.equal(saved.status, 200, await saved.clone().text());
+      const rejected = await request("POST", "/import", { expectedReviewRevision: 1 });
+      assert.equal(rejected.status, 400, await rejected.clone().text());
+      assert.equal(sqlite.prepare("SELECT count(*) AS count FROM bottles").get()?.["count"], 0);
+      const corrected = await request("PATCH", "/review", {
+        expectedRevision: 1,
+        candidate: { ...candidate, wine: { ...candidate.wine, alcoholPercent: 14 } },
+      });
+      assert.equal(corrected.status, 200, await corrected.clone().text());
+      const imported = await request("POST", "/import", { expectedReviewRevision: 2 });
+      assert.equal(imported.status, 200, await imported.clone().text());
+    } finally {
+      sqlite.close();
+    }
+  });
+
   await it("requires a saved correction before manually importing unresolved measurements", async () => {
     for (const reuseWine of [false, true]) {
       const { sqlite, request } = setup();
