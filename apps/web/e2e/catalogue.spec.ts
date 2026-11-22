@@ -695,6 +695,27 @@ test("keeps successful destructive lifecycles mounted through reload and restore
   await expect(page.getByRole("heading", { exact: true, name: "Sites" })).toBeFocused();
 });
 
+test("returns focus to the Sites heading after a committed delete even when a refresh still shows the site", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Storage" }).click();
+  const sitesRegion = page.getByRole("region", { exact: true, name: "Sites" });
+  const trigger = sitesRegion.getByRole("button", { name: "Delete" });
+  await trigger.click();
+  await page.route("**/api/sites/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ status: 204 });
+    } else {
+      await route.fallback();
+    }
+  });
+  const dialog = page.getByRole("alertdialog", { name: "Delete Home cellar?" });
+  await dialog.getByRole("button", { name: "Delete site" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeVisible();
+  await expect(sitesRegion.getByRole("heading", { name: "Sites", exact: true })).toBeFocused();
+});
+
 test("treats a committed delete as successful when catalogue refresh fails", async ({ page }) => {
   await page.unroute("**/api/**");
   const scenario: StaleRefreshScenario = {
