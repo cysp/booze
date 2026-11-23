@@ -25,7 +25,7 @@
     "@fontsource-variable/figtree": "5.3.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@stylexjs/stylex": "0.19.1",
-    "drizzle-orm": "1.0.0-rc.5",
+    "drizzle-orm": "1.0.0-rc.6",
     "hono": "4.13.19",
     "react": "19.3.1",
     "react-dom": "19.3.1",
