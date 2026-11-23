@@ -17,8 +17,8 @@
     "wrangler:types": "WRANGLER_WRITE_LOGS=false wrangler types --include-runtime=false"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.7.16",
-    "@astryxdesign/theme-neutral": "0.7.16",
+    "@astryxdesign/core": "0.7.17",
+    "@astryxdesign/theme-neutral": "0.7.17",
     "@chikachow/booze-db": "workspace:*",
     "@clerk/backend": "3.31.2",
     "@clerk/react": "6.19.2",
@@ -33,8 +33,8 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@astryxdesign/build": "0.7.16",
-    "@astryxdesign/cli": "0.7.16",
+    "@astryxdesign/build": "0.7.17",
+    "@astryxdesign/cli": "0.7.17",
     "@cloudflare/vite-plugin": "1.70.1",
     "@cloudflare/workers-types": "5.20261120.1",
     "@playwright/test": "1.65.1",
